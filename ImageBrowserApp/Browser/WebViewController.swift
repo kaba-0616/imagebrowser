@@ -1,11 +1,12 @@
 import WebKit
 import Combine
 
-/// Owns the single WKWebView instance for the app. A full browser (unlike
-/// ImageSaver's Action Extension) can inject scripts and call
-/// evaluateJavaScript at any time, so there is no completionFunction-style
-/// one-shot handoff here -- the collector script is injected once as a
-/// WKUserScript (function definitions only) and invoked on demand.
+/// Owns one WKWebView instance (one per browser tab -- see TabManager). A
+/// full browser (unlike ImageSaver's Action Extension) can inject scripts
+/// and call evaluateJavaScript at any time, so there is no
+/// completionFunction-style one-shot handoff here -- the collector script is
+/// injected once as a WKUserScript (function definitions only) and invoked
+/// on demand.
 @MainActor
 final class WebViewController: NSObject, ObservableObject {
 
@@ -198,10 +199,10 @@ extension WebViewController: UIGestureRecognizerDelegate {
 
 enum BrowserDefaults {
     static func searchURL(for query: String) -> URL {
-        var components = URLComponents(string: "https://www.google.com/search")!
-        components.queryItems = [URLQueryItem(name: "q", value: query)]
-        return components.url!
+        SearchEngineStore.current.searchURL(for: query)
     }
 
-    static let homeURL = URL(string: "https://www.google.com")!
+    static var homeURL: URL {
+        SearchEngineStore.current.homeURL
+    }
 }
