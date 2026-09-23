@@ -15,7 +15,11 @@
     "use strict";
 
     // インターフェース部品(スピナー・再生ボタン等)の静的リソースパス。
-    var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\//i;
+    // img_protect.pngはmdpr.jp(モデルプレス)の写真詳細ページで、本物の
+    // サムネイルの真上に重なる保護用オーバーレイ画像。実在するsrcを持つ
+    // ため素通りせず、長押しでこれを検出してしまうと本物の写真まで
+    // 辿り着けない(elementsFromPointのスタックで先に見つかるため)。
+    var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\/|\/img_protect\.png/i;
 
     // .../<hash>/1200_1200_102400.jpg のようなリサイズ配信URLから
     // 元画像URLを復元する。
@@ -253,14 +257,14 @@
             var url = node.currentSrc || node.src
                 || bestFromSrcset(node.getAttribute("srcset"))
                 || fromLazyAttrs(node);
-            if (url) { return resolve(url); }
+            if (url && !UI_ASSET_PATH.test(url)) { return resolve(url); }
         }
         var style;
         try { style = getComputedStyle(node); } catch (e) { style = null; }
         var bg = style && style.backgroundImage;
         if (bg && bg.indexOf("url(") !== -1) {
             var m = /url\(["']?([^"')]+)["']?\)/.exec(bg);
-            if (m) { return resolve(m[1]); }
+            if (m && !UI_ASSET_PATH.test(m[1])) { return resolve(m[1]); }
         }
         return null;
     }

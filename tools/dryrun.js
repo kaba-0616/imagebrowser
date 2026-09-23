@@ -216,5 +216,24 @@ function checkJSONSafe(images) {
     check("重なりの奥のimgまで拾える", hit === "https://example.com/card-thumb.jpg", String(hit));
 }
 
+// ---------------------------------------------------------------------------
+// findImageAt: mdpr.jpのimg_protect.png(保護用オーバーレイ)は実在するsrcを
+// 持つため素通りせず、UI_ASSET_PATHで除外してその奥の本物の写真まで拾う。
+// ---------------------------------------------------------------------------
+{
+    const protect = El("img",
+        { src: "https://img-mdpr.freetls.fastly.net/common/web/common/img_protect.png?quality=40&auto=webp" },
+        { rect: { width: 300, height: 200 } });
+    const photo = El("img", { src: "https://img-mdpr.freetls.fastly.net/article/1234/wm/photo.jpg" },
+        { nw: 1200, nh: 800 });
+    const collector = run("https://mdpr.jp/photo/detail/1", [], {
+        elementsAt: (x, y) => (x === 100 && y === 200) ? [protect, photo] : []
+    });
+    const hit = collector.findImageAt(100, 200);
+    console.log("\nfindImageAt(mdprの保護用オーバーレイ):");
+    check("img_protect.pngを飛ばして本物の写真を拾う",
+          hit === "https://img-mdpr.freetls.fastly.net/article/1234/wm/photo.jpg", String(hit));
+}
+
 console.log(failures ? `\n${failures}件 失敗` : "\nすべて通過");
 process.exit(failures ? 1 : 0);
