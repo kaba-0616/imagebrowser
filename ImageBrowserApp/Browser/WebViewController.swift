@@ -1,0 +1,198 @@
+import WebKit
+import Combine
+
+/// Owns the single WKWebView instance for the app. A full browser (unlike
+/// ImageSaver's Action Extension) can inject scripts and call
+/// evaluateJavaScript at any time, so there is no completionFunction-style
+/// one-shot handoff here -- the collector script is injected once as a
+/// WKUserScript (function definitions only) and invoked on demand.
+@MainActor
+final class WebViewController: NSObject, ObservableObject {
+
+    let webView: WKWebView
+
+    @Published private(set) var urlString: String = ""
+    @Published private(set) var canGoBack = false
+    @Published private(set) var canGoForward = false
+    @Published private(set) var isLoading = false
+    @Published private(set) var estimatedProgress: Double = 0
+    @Published private(set) var pageTitle: String = ""
+    /// Set when the long-press gesture resolves to an image URL on the page.
+    /// BrowserView watches this to present the save confirmation.
+    @Published var longPressedImageURL: URL?
+
+    private var kvoObservations: [NSKeyValueObservation] = []
+
+    override init() {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+
+        let userContentController = WKUserContentController()
+        if let script = WebViewController.loadCollectorScript() {
+            userContentController.addUserScript(
+                WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+            )
+        }
+        configuration.userContentController = userContentController
+
+        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.allowsBackForwardNavigationGestures = true
+        // The built-in long-press preview/menu would otherwise compete with
+        // our own gesture recognizer below, and its behavior is subject to
+        // whatever the page's own CSS/JS does (-webkit-touch-callout etc.) --
+        // exactly the kind of site-side interference this app exists to
+        // bypass.
+        webView.allowsLinkPreview = false
+
+        super.init()
+
+        webView.navigationDelegate = self
+        webView.uiDelegate = self
+        observeWebView()
+        installLongPressRecognizer()
+    }
+
+    deinit {
+        kvoObservations.forEach { $0.invalidate() }
+    }
+
+    // MARK: - Navigation
+
+    func load(urlString input: String) {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let target: URL
+        if let url = URL(string: trimmed), url.scheme != nil {
+            target = url
+        } else if trimmed.contains(".") && !trimmed.contains(" ") {
+            target = URL(string: "https://" + trimmed) ?? BrowserDefaults.searchURL(for: trimmed)
+        } else {
+            target = BrowserDefaults.searchURL(for: trimmed)
+        }
+        webView.load(URLRequest(url: target))
+    }
+
+    func goBack() { webView.goBack() }
+    func goForward() { webView.goForward() }
+    func reloadOrStop() {
+        if isLoading {
+            webView.stopLoading()
+        } else {
+            webView.reload()
+        }
+    }
+
+    // MARK: - Image extraction
+
+    func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
+        try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
+    }
+
+    // MARK: - Setup
+
+    private func observeWebView() {
+        kvoObservations = [
+            webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+                Task { @MainActor in self?.urlString = webView.url?.absoluteString ?? "" }
+            },
+            webView.observe(\.canGoBack, options: [.new]) { [weak self] webView, _ in
+                Task { @MainActor in self?.canGoBack = webView.canGoBack }
+            },
+            webView.observe(\.canGoForward, options: [.new]) { [weak self] webView, _ in
+                Task { @MainActor in self?.canGoForward = webView.canGoForward }
+            },
+            webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
+                Task { @MainActor in self?.isLoading = webView.isLoading }
+            },
+            webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
+                Task { @MainActor in self?.estimatedProgress = webView.estimatedProgress }
+            },
+            webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
+                Task { @MainActor in self?.pageTitle = webView.title ?? "" }
+            }
+        ]
+    }
+
+    private func installLongPressRecognizer() {
+        let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        recognizer.minimumPressDuration = 0.45
+        recognizer.delegate = self
+        webView.scrollView.addGestureRecognizer(recognizer)
+    }
+
+    @objc private func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+        guard recognizer.state == .began else { return }
+        // WKWebView's point(in:) is already in CSS-pixel-equivalent points at
+        // the default (non-zoomed) scale, which is what elementFromPoint
+        // expects.
+        let point = recognizer.location(in: webView)
+        let webView = self.webView
+        Task { [weak self] in
+            if let url = await ImageExtractionBridge.findImage(in: webView, at: point) {
+                self?.longPressedImageURL = url
+            }
+        }
+    }
+
+    private static func loadCollectorScript() -> String? {
+        guard let url = Bundle.main.url(forResource: "ImageCollector", withExtension: "js") else {
+            assertionFailure("ImageCollector.js is missing from the app bundle")
+            return nil
+        }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+}
+
+extension WebViewController: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // Cancelled loads (e.g. tapping a link mid-load) surface the same
+        // NSURLErrorCancelled every browser silently swallows.
+    }
+}
+
+extension WebViewController: WKUIDelegate {
+    /// Suppresses WebKit's own context menu so a site cannot substitute its
+    /// own save-blocking behavior for it; our long-press recognizer is the
+    /// only path to the save sheet.
+    func webView(
+        _ webView: WKWebView,
+        contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+        completionHandler: @escaping (UIContextMenuConfiguration?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+
+    /// `target="_blank"` links open in the same view -- this app has no tab
+    /// model yet.
+    func webView(
+        _ webView: WKWebView,
+        createWebViewWith configuration: WKWebViewConfiguration,
+        for navigationAction: WKNavigationAction,
+        windowFeatures: WKWindowFeatures
+    ) -> WKWebView? {
+        if let url = navigationAction.request.url {
+            webView.load(URLRequest(url: url))
+        }
+        return nil
+    }
+}
+
+extension WebViewController: UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
+    }
+}
+
+enum BrowserDefaults {
+    static func searchURL(for query: String) -> URL {
+        var components = URLComponents(string: "https://www.google.com/search")!
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        return components.url!
+    }
+
+    static let homeURL = URL(string: "https://www.google.com")!
+}

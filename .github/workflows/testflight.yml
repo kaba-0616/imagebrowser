@@ -1,0 +1,141 @@
+name: Upload to TestFlight
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  upload:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project ImageBrowser.xcodeproj \
+            -scheme ImageBrowserApp
+
+      - name: Import signing certificate and provisioning profile
+        env:
+          DISTRIBUTION_CERTIFICATE_P12_BASE64: ${{ secrets.DISTRIBUTION_CERTIFICATE_P12_BASE64 }}
+          DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          PROVISION_PROFILE_BASE64: ${{ secrets.PROVISION_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -e
+          CERT_PATH="$RUNNER_TEMP/distribution.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+
+          echo -n "$DISTRIBUTION_CERTIFICATE_P12_BASE64" | base64 -D -o "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$DISTRIBUTION_CERTIFICATE_PASSWORD" -A \
+            -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+
+          PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILES_DIR"
+
+          PROFILE_PATH="$RUNNER_TEMP/app.mobileprovision"
+          echo -n "$PROVISION_PROFILE_BASE64" | base64 -D -o "$PROFILE_PATH"
+          UUID=$(security cms -D -i "$PROFILE_PATH" | plutil -extract UUID xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+          cp "$PROFILE_PATH" "$PROFILES_DIR/$UUID.mobileprovision"
+
+      - name: Archive (signed)
+        run: |
+          mkdir -p build
+          set -o pipefail
+          xcodebuild archive \
+            -project ImageBrowser.xcodeproj \
+            -scheme ImageBrowserApp \
+            -configuration Release \
+            -archivePath build/ImageBrowser.xcarchive \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            ONLY_ACTIVE_ARCH=NO \
+            2>&1 | tee build/xcodebuild.log
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Show compile errors (on failure)
+        if: failure()
+        run: |
+          {
+            if [ ! -f build/xcodebuild.log ]; then
+              echo "### ログなし (アーカイブ開始前に失敗)"
+              exit 0
+            fi
+            echo "### コンパイル/署名エラー"
+            echo '```'
+            grep -n "error:" build/xcodebuild.log | head -n 40 || echo "(error: の行なし)"
+            echo '```'
+            echo "### ログ末尾"
+            echo '```'
+            tail -n 60 build/xcodebuild.log
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Export App Store IPA
+        run: |
+          set -e
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>BY99ZS478M</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>jp.kaba.imagebrowser</key>
+              <string>ImageBrowser AppStore</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/ImageBrowser.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist build/ExportOptions.plist \
+            2>&1 | tee build/export.log
+
+      - name: Upload to TestFlight
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_API_KEY_P8_BASE64: ${{ secrets.APPSTORE_API_KEY_P8_BASE64 }}
+        run: |
+          set -e
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$APPSTORE_API_KEY_P8_BASE64" | base64 -D \
+            -o ~/.appstoreconnect/private_keys/AuthKey_${APPSTORE_KEY_ID}.p8
+
+          IPA_PATH=$(find build/export -name "*.ipa" | head -n 1)
+          xcrun altool --upload-app -f "$IPA_PATH" -t ios \
+            --apiKey "$APPSTORE_KEY_ID" --apiIssuer "$APPSTORE_ISSUER_ID"
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "### TestFlightへアップロード完了" >> "$GITHUB_STEP_SUMMARY"
+          echo "App Store Connect の TestFlight タブに数分〜数十分で反映されます。" >> "$GITHUB_STEP_SUMMARY"

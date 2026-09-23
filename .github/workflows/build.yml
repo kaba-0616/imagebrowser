@@ -1,0 +1,85 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project ImageBrowser.xcodeproj \
+            -scheme ImageBrowserApp
+
+      - name: Archive (unsigned)
+        run: |
+          mkdir -p build
+          set -o pipefail
+          xcodebuild archive \
+            -project ImageBrowser.xcodeproj \
+            -scheme ImageBrowserApp \
+            -configuration Release \
+            -archivePath build/ImageBrowser.xcarchive \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            2>&1 | tee build/xcodebuild.log
+
+      - name: Show compile errors (on failure)
+        if: failure()
+        run: |
+          {
+            if [ ! -f build/xcodebuild.log ]; then
+              echo "### ログなし (アーカイブ開始前に失敗)"
+              exit 0
+            fi
+            echo "### コンパイルエラー"
+            echo '```'
+            grep -n "error:" build/xcodebuild.log | head -n 40 || echo "(error: の行なし)"
+            echo '```'
+            echo "### ログ末尾"
+            echo '```'
+            tail -n 60 build/xcodebuild.log
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Package IPA (unsigned, for local sideloading)
+        run: |
+          set -e
+          APP_PATH="build/ImageBrowser.xcarchive/Products/Applications"
+          mkdir -p build/Payload
+          cp -R "$APP_PATH"/*.app build/Payload/
+          cd build
+          zip -r -y ImageBrowser.ipa Payload
+          cd ..
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImageBrowser-ipa
+          path: build/ImageBrowser.ipa
+          retention-days: 14
+
+      - name: Show download link
+        run: |
+          echo "### ビルドDLページ" >> "$GITHUB_STEP_SUMMARY"
+          echo "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
