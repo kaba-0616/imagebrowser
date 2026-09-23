@@ -114,7 +114,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagebrowser
-        MARKETING_VERSION: "1.0.0"
+        # リリース(App Store公開)までは0.x.xで刻む。1.0.0への切り替えは
+        # 正式リリース時に行う。
+        MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
