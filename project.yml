@@ -48,11 +48,8 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         NSPhotoLibraryAddUsageDescription: "抽出した画像をカメラロールに保存するために使用します。"
-        # プレースホルダ(Googleのテスト用App ID)。AdMobコンソールで
-        # imagebrowser用の実App IDを発行したら差し替える。差し替え忘れの
-        # まま申請するとApp Store審査で広告が出ない/テスト広告のまま
-        # 配信されるだけで実害は無いが、収益は発生しない。
-        GADApplicationIdentifier: "ca-app-pub-3940256099942544~1458002511"
+        # imagebrowser用にAdMobコンソールで発行した実App ID。
+        GADApplicationIdentifier: "ca-app-pub-1034383442757151~4077627135"
         NSUserTrackingUsageDescription: "広告の表示に使う情報の取得許可をお願いします。許可しなくても広告自体は表示されますが、内容の関連性が下がります。"
         SKAdNetworkItems:
           - SKAdNetworkIdentifier: 22mmun2rn5.skadnetwork
@@ -117,7 +114,7 @@ targets:
         # リリース(App Store公開)までは0.x.xで刻む。1.0.0への切り替えは
         # 正式リリース時に行う。
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "2"
+        CURRENT_PROJECT_VERSION: "3"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:

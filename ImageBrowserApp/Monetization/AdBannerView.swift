@@ -23,13 +23,10 @@ struct AdBannerView: UIViewRepresentable {
 enum AdUnit {
     case bottom
 
-    /// Placeholder: Google's public test banner unit. Replace with the real
-    /// AdMob-issued ID for jp.kaba.imagebrowser once the app is registered
-    /// in the AdMob console (see project.yml's GADApplicationIdentifier
-    /// comment -- both need to move together).
+    /// imagebrowser用にAdMobコンソールで発行した実バナー広告ユニットID。
     var id: String {
         switch self {
-        case .bottom: return "ca-app-pub-3940256099942544/2934735716"
+        case .bottom: return "ca-app-pub-1034383442757151/9505213630"
         }
     }
 }
