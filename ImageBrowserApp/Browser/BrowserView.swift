@@ -67,6 +67,29 @@ private struct BrowserTabContentView: View {
             addressBar
             progressBar
             WebViewRepresentable(webView: controller.webView)
+                .overlay(alignment: .topLeading) {
+                    if let url = controller.longPressedImageURL, let point = controller.longPressLocation {
+                        GeometryReader { proxy in
+                            SafariStyleImageMenu(
+                                onSave: {
+                                    saveSingle(url)
+                                    controller.dismissLongPressMenu()
+                                },
+                                onCopyLink: {
+                                    UIPasteboard.general.string = url.absoluteString
+                                    controller.dismissLongPressMenu()
+                                }
+                            )
+                            .position(clampedMenuPosition(around: point, in: proxy.size))
+                        }
+                        .background(
+                            Color.black.opacity(0.001)
+                                .onTapGesture { controller.dismissLongPressMenu() }
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .center)))
+                        .animation(.easeOut(duration: 0.15), value: controller.longPressedImageURL)
+                    }
+                }
             // A fixed-height bar below the content, not an overlay on top of
             // it -- an overlay would sit over the bottom of every page,
             // covering whatever the site placed there.
@@ -89,24 +112,6 @@ private struct BrowserTabContentView: View {
         }
         .sheet(isPresented: $showPaywall) {
             PaywallView(store: store) { showPaywall = false }
-        }
-        .confirmationDialog(
-            "この画像を保存しますか?",
-            isPresented: Binding(
-                get: { controller.longPressedImageURL != nil },
-                set: { if !$0 { controller.longPressedImageURL = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("保存する") {
-                if let url = controller.longPressedImageURL {
-                    saveSingle(url)
-                }
-                controller.longPressedImageURL = nil
-            }
-            Button("キャンセル", role: .cancel) {
-                controller.longPressedImageURL = nil
-            }
         }
         .alert("抽出に失敗しました", isPresented: Binding(
             get: { extractionError != nil },
@@ -264,5 +269,64 @@ private struct BrowserTabContentView: View {
     private func saveSingle(_ url: URL) {
         let image = PageImage(id: 0, url: url, width: 0, height: 0, renderedURL: nil, origin: "dom")
         Task { await longPressSaver.save([image]) }
+    }
+
+    /// Prefers appearing above the touch point (matching Safari), flipping
+    /// below when there isn't room, and clamped so the card never runs off
+    /// either edge of the WebView.
+    private func clampedMenuPosition(around point: CGPoint, in containerSize: CGSize) -> CGPoint {
+        let menuWidth: CGFloat = SafariStyleImageMenu.width
+        let menuHeight: CGFloat = SafariStyleImageMenu.estimatedHeight
+        let margin: CGFloat = 12
+
+        let x = min(max(point.x, menuWidth / 2 + margin), containerSize.width - menuWidth / 2 - margin)
+
+        let aboveY = point.y - menuHeight / 2 - 24
+        let y: CGFloat
+        if aboveY - menuHeight / 2 >= margin {
+            y = aboveY
+        } else {
+            y = min(point.y + menuHeight / 2 + 24, containerSize.height - menuHeight / 2 - margin)
+        }
+        return CGPoint(x: x, y: y)
+    }
+}
+
+/// A floating card styled like Safari's own long-press image menu (frosted
+/// background, icon + label rows, no explicit cancel -- tapping outside
+/// dismisses it) rather than a generic bottom action sheet.
+private struct SafariStyleImageMenu: View {
+    static let width: CGFloat = 250
+    static let estimatedHeight: CGFloat = 96
+
+    let onSave: () -> Void
+    let onCopyLink: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            row(icon: "square.and.arrow.down", title: "\"写真\"に保存", action: onSave)
+            Divider()
+            row(icon: "doc.on.doc", title: "リンクをコピー", action: onCopyLink)
+        }
+        .frame(width: Self.width)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+
+    private func row(icon: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                    .font(.system(size: 15))
+                    .foregroundColor(.primary)
+                Spacer()
+                Image(systemName: icon)
+                    .foregroundColor(.primary)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

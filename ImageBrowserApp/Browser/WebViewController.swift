@@ -19,8 +19,12 @@ final class WebViewController: NSObject, ObservableObject {
     @Published private(set) var estimatedProgress: Double = 0
     @Published private(set) var pageTitle: String = ""
     /// Set when the long-press gesture resolves to an image URL on the page.
-    /// BrowserView watches this to present the save confirmation.
+    /// BrowserView watches this to present the save menu.
     @Published var longPressedImageURL: URL?
+    /// Where the long press landed, in the same coordinate space as
+    /// `webView` itself -- lets the save menu anchor near the touch point
+    /// the way Safari's own does, instead of a generic bottom sheet.
+    @Published private(set) var longPressLocation: CGPoint?
 
     private var kvoObservations: [NSKeyValueObservation] = []
 
@@ -155,11 +159,17 @@ final class WebViewController: NSObject, ObservableObject {
         Task { [weak self] in
             if let url = await ImageExtractionBridge.findImage(in: webView, at: point) {
                 AppLog.log("長押しで画像を検出: \(url.absoluteString)")
+                self?.longPressLocation = point
                 self?.longPressedImageURL = url
             } else {
                 AppLog.log("長押し位置に画像なし (\(Int(point.x)), \(Int(point.y)))")
             }
         }
+    }
+
+    func dismissLongPressMenu() {
+        longPressedImageURL = nil
+        longPressLocation = nil
     }
 
     private static func loadCollectorScript() -> String? {
