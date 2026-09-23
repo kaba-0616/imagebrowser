@@ -68,26 +68,34 @@ private struct TabCell: View {
             }
             .padding(8)
 
-            ZStack {
-                if let thumbnail = controller.thumbnail {
-                    Image(uiImage: thumbnail)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    Rectangle().fill(Color(.secondarySystemBackground))
-                    Image(systemName: "safari")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary)
+            // onSelect lives on this group only, not on the whole cell --
+            // the close button sits in the row above, and a tap gesture on
+            // the full cell would overlap it and win over the Button's own
+            // tap, so the X silently reopened the tab instead of closing it.
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack {
+                    if let thumbnail = controller.thumbnail {
+                        Image(uiImage: thumbnail)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Rectangle().fill(Color(.secondarySystemBackground))
+                        Image(systemName: "safari")
+                            .font(.system(size: 32))
+                            .foregroundColor(.secondary)
+                    }
                 }
-            }
-            .frame(height: 100)
-            .clipped()
+                .frame(height: 100)
+                .clipped()
 
-            Text(controller.urlString)
-                .font(.caption2)
-                .lineLimit(1)
-                .foregroundColor(.secondary)
-                .padding(8)
+                Text(controller.urlString)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .foregroundColor(.secondary)
+                    .padding(8)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
         }
         .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -95,6 +103,5 @@ private struct TabCell: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(isActive ? Color.accentColor : Color(.separator), lineWidth: isActive ? 2 : 1)
         )
-        .onTapGesture(perform: onSelect)
     }
 }
