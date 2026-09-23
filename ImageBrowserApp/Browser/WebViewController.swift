@@ -38,6 +38,16 @@ final class WebViewController: NSObject, ObservableObject {
     override init() {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
+        // WKWebView's default User-Agent has no trailing "Safari/..." token
+        // (only Mobile Safari itself and SFSafariViewController send one).
+        // Sites that sniff the UA -- Google's search page among them --
+        // treat that as "unsupported browser" and serve a stripped-down,
+        // years-old layout instead of the normal one. Appending this via
+        // the official API keeps WebKit's own OS/device portion of the UA
+        // intact and just adds the token those sites check for; it doesn't
+        // need to track the actual Safari version since "Safari/605.1.15"
+        // has stayed the same build marker across many iOS releases.
+        configuration.applicationNameForUserAgent = "Version/17.4 Safari/605.1.15"
 
         let userContentController = WKUserContentController()
         if let script = WebViewController.loadCollectorScript() {
