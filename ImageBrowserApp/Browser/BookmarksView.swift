@@ -44,10 +44,8 @@ struct BookmarksView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { onClose() }
                 }
-                if !store.bookmarks.isEmpty {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        EditButton()
-                    }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    EditButton().disabled(store.bookmarks.isEmpty)
                 }
             }
         }
