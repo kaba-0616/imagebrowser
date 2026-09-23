@@ -20,6 +20,7 @@ struct ImageGridView: View {
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
     @State private var fullscreenIndex: Int = 0
+    @State private var showSaveLog = false
 
     private var visibleImages: [PageImage] {
         images.filter { !photoSaver.savedImageIDs.contains($0.id) }
@@ -40,6 +41,9 @@ struct ImageGridView: View {
             .overlay(savingOverlay)
             .animation(.easeInOut(duration: 0.15), value: photoSaver.isSaving)
             .preferredColorScheme(.dark)
+            .sheet(isPresented: $showSaveLog) {
+                SaveLogView { showSaveLog = false }
+            }
     }
 
     @ViewBuilder
@@ -159,9 +163,14 @@ struct ImageGridView: View {
     private var bottomBar: some View {
         VStack(spacing: 6) {
             if case .finished(let succeeded, let failed, let message) = photoSaver.state {
-                Text(message ?? "完了: 成功\(succeeded) 失敗\(failed)")
-                    .font(.system(size: 11))
-                    .foregroundColor(failed > 0 ? .red : .gray)
+                HStack {
+                    Text(message ?? "完了: 成功\(succeeded) 失敗\(failed)")
+                        .font(.system(size: 11))
+                        .foregroundColor(failed > 0 ? .red : .gray)
+                    Spacer()
+                    Button("ログ") { showSaveLog = true }
+                        .font(.system(size: 11))
+                }
             }
 
             HStack {

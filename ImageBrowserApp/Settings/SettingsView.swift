@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(SearchEngineStore.key) private var searchEngineRaw = SearchEngine.google.rawValue
     @State private var isRestoring = false
     @State private var restoreMessage: String?
+    @State private var showSaveLog = false
 
     var body: some View {
         NavigationView {
@@ -51,6 +52,7 @@ struct SettingsView: View {
                 Section("サポート") {
                     Link("プライバシーポリシー", destination: URL(string: "https://kaba-0616.github.io/imagebrowser/privacy.html")!)
                     Link("サポート", destination: URL(string: "https://kaba-0616.github.io/imagebrowser/support.html")!)
+                    Button("保存ログを見る") { showSaveLog = true }
                 }
 
                 Section {
@@ -68,6 +70,9 @@ struct SettingsView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { onClose() }
                 }
+            }
+            .sheet(isPresented: $showSaveLog) {
+                SaveLogView { showSaveLog = false }
             }
         }
         .navigationViewStyle(.stack)
