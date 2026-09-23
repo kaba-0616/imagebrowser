@@ -144,17 +144,25 @@ private struct BrowserTabContentView: View {
         }
     }
 
+    /// Every item gets equal width instead of clustering at the ends with
+    /// two Spacers between three groups -- that left uneven gaps (four
+    /// icons bunched left, one centered, two bunched right).
     private var toolbar: some View {
         HStack(spacing: 0) {
             toolbarButton("chevron.left", disabled: !controller.canGoBack) { controller.goBack() }
+                .frame(maxWidth: .infinity)
             toolbarButton("chevron.right", disabled: !controller.canGoForward) { controller.goForward() }
+                .frame(maxWidth: .infinity)
             toolbarButton(controller.isLoading ? "xmark" : "arrow.clockwise") { controller.reloadOrStop() }
+                .frame(maxWidth: .infinity)
             bookmarkButton
-            Spacer()
+                .frame(maxWidth: .infinity)
             extractButton
-            Spacer()
+                .frame(maxWidth: .infinity)
             tabsButton
+                .frame(maxWidth: .infinity)
             toolbarButton("gearshape") { onShowSettings() }
+                .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
