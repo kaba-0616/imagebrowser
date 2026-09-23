@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Reads PersistentLog directly rather than taking a PhotoSaver instance --
-/// there are two independent PhotoSaver instances in the app (one per
-/// long-press save, one inside ImageGridView), and PersistentLog is the one
-/// place that has whichever of them ran most recently, which is what "保存
-/// が出てこない" troubleshooting actually needs.
+/// Reads AppLog directly -- it is the one shared record across page loads,
+/// long-press hit-tests, bulk extraction and both PhotoSaver instances (one
+/// per long-press save, one inside ImageGridView), which is what "保存が
+/// 出てこない" troubleshooting needs: not just what the save did, but
+/// whether the page even loaded and whether extraction found anything.
 struct SaveLogView: View {
     let onClose: () -> Void
 
-    @State private var lines: [String] = PersistentLog.read()
+    @State private var lines: [String] = AppLog.read().reversed()
     @State private var confirmingClear = false
 
     var body: some View {
@@ -19,7 +19,7 @@ struct SaveLogView: View {
                         Image(systemName: "doc.text.magnifyingglass")
                             .font(.system(size: 32))
                             .foregroundColor(.secondary)
-                        Text("まだ保存の記録がありません")
+                        Text("まだ記録がありません")
                             .foregroundColor(.secondary)
                     }
                 } else {
@@ -28,7 +28,7 @@ struct SaveLogView: View {
                             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                                 Text(line)
                                     .font(.system(size: 12, design: .monospaced))
-                                    .foregroundColor(line.hasPrefix("[ERR]") ? .red : .primary)
+                                    .foregroundColor(line.contains("[ERR]") ? .red : .primary)
                                     .textSelection(.enabled)
                             }
                         }
@@ -37,11 +37,18 @@ struct SaveLogView: View {
                     }
                 }
             }
-            .navigationTitle("保存ログ")
+            .navigationTitle("ログ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { onClose() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        lines = AppLog.read().reversed()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -62,13 +69,13 @@ struct SaveLogView: View {
             }
             .confirmationDialog("ログを消去しますか?", isPresented: $confirmingClear, titleVisibility: .visible) {
                 Button("消去する", role: .destructive) {
-                    PersistentLog.clear()
+                    AppLog.clear()
                     lines = []
                 }
                 Button("キャンセル", role: .cancel) {}
             }
             .refreshable {
-                lines = PersistentLog.read()
+                lines = AppLog.read().reversed()
             }
         }
         .navigationViewStyle(.stack)

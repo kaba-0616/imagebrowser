@@ -34,6 +34,20 @@ final class WebViewController: NSObject, ObservableObject {
                 WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
             )
         }
+        // WebKit's own text-selection interaction is a separate gesture
+        // path from the context menu (which contextMenuConfigurationForElement
+        // already suppresses below) -- on a site that disables its own
+        // save affordances, long-pressing an image was instead starting a
+        // text/loupe selection, since nothing had told WebKit not to. This
+        // disables that native callout/selection specifically on images,
+        // leaving our own gesture recognizer as the only thing that reacts.
+        userContentController.addUserScript(
+            WKUserScript(
+                source: WebViewController.disableImageCalloutCSS,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: false
+            )
+        )
         configuration.userContentController = userContentController
 
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -140,7 +154,10 @@ final class WebViewController: NSObject, ObservableObject {
         let webView = self.webView
         Task { [weak self] in
             if let url = await ImageExtractionBridge.findImage(in: webView, at: point) {
+                AppLog.log("長押しで画像を検出: \(url.absoluteString)")
                 self?.longPressedImageURL = url
+            } else {
+                AppLog.log("長押し位置に画像なし (\(Int(point.x)), \(Int(point.y)))")
             }
         }
     }
@@ -152,12 +169,41 @@ final class WebViewController: NSObject, ObservableObject {
         }
         return try? String(contentsOf: url, encoding: .utf8)
     }
+
+    private static let disableImageCalloutCSS = """
+    (function () {
+        var style = document.createElement('style');
+        style.textContent = 'img, picture, svg {'
+            + '-webkit-touch-callout: none !important;'
+            + '-webkit-user-select: none !important;'
+            + '}';
+        (document.head || document.documentElement).appendChild(style);
+    })();
+    """
 }
 
 extension WebViewController: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        AppLog.log("読み込み開始: \(webView.url?.absoluteString ?? "?")")
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        AppLog.log("読み込み完了: \(webView.url?.absoluteString ?? "?")")
+    }
+
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         // Cancelled loads (e.g. tapping a link mid-load) surface the same
-        // NSURLErrorCancelled every browser silently swallows.
+        // NSURLErrorCancelled every browser silently swallows -- logged
+        // anyway since a save failure right after a cancelled load is a
+        // plausible correlation to check.
+        let nsError = error as NSError
+        AppLog.log("読み込み失敗(遷移前): \(webView.url?.absoluteString ?? "?") — \(nsError.domain) \(nsError.code)",
+                    isError: nsError.code != NSURLErrorCancelled)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        let nsError = error as NSError
+        AppLog.log("読み込み失敗: \(webView.url?.absoluteString ?? "?") — \(nsError.domain) \(nsError.code)", isError: true)
     }
 }
 

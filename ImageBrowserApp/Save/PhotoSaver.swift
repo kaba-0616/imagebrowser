@@ -106,9 +106,10 @@ final class PhotoSaver: ObservableObject {
 
     private func appendLog(_ text: String, isError: Bool = false) {
         log.append(LogEntry(time: Date(), text: text, isError: isError))
-        // Persisted after every line so a crash or force-quit mid-save still
-        // leaves a trace readable on the next launch.
-        PersistentLog.write(log)
+        // Persisted (via AppLog, shared with page-load/extraction events) so
+        // a crash or force-quit mid-save still leaves a trace readable on
+        // the next launch, alongside what the page was doing at the time.
+        AppLog.log(text, isError: isError)
     }
 
     private func saveOne(_ image: PageImage) async -> Result<Void, Error> {
@@ -144,10 +145,15 @@ final class PhotoSaver: ObservableObject {
 
     private func fetch(_ url: URL, isSVG: Bool) async throws -> Data {
         let (data, response) = try await session.data(from: url)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode
+        appendLog("取得: \(url.absoluteString) — HTTP \(statusCode.map(String.init) ?? "?") \(data.count)bytes")
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw SaveError.httpError(http.statusCode)
         }
-        if !isSVG, UIImage(data: data) == nil { throw SaveError.decodeFailed }
+        if !isSVG, UIImage(data: data) == nil {
+            appendLog("デコード失敗: \(url.absoluteString)", isError: true)
+            throw SaveError.decodeFailed
+        }
         return data
     }
 

@@ -161,21 +161,31 @@ private struct BrowserTabContentView: View {
         .background(.bar)
     }
 
-    /// Tap toggles the current page; long-press opens the full list -- kept
-    /// on one button rather than two, since "show bookmarks" is a much
-    /// rarer action than "bookmark this page".
+    /// A menu rather than a bare toggle: "add/remove this page" and "open
+    /// the full list" are both things a tap here should reach, and a menu
+    /// makes both discoverable instead of hiding the list behind a
+    /// long-press nobody would find on their own.
     private var bookmarkButton: some View {
-        Button {
-            guard let url = controller.webView.url else { return }
-            bookmarkStore.toggle(title: controller.pageTitle, url: url)
+        Menu {
+            Button {
+                guard let url = controller.webView.url else { return }
+                bookmarkStore.toggle(title: controller.pageTitle, url: url)
+            } label: {
+                Label(
+                    currentPageIsBookmarked ? "ブックマークを解除" : "このページをブックマーク",
+                    systemImage: currentPageIsBookmarked ? "star.slash" : "star"
+                )
+            }
+            Button {
+                onShowBookmarks()
+            } label: {
+                Label("ブックマーク一覧を見る", systemImage: "list.bullet")
+            }
         } label: {
             Image(systemName: currentPageIsBookmarked ? "star.fill" : "star")
                 .frame(width: 44, height: 32)
         }
         .disabled(controller.webView.url == nil)
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.5).onEnded { _ in onShowBookmarks() }
-        )
     }
 
     private var currentPageIsBookmarked: Bool {
@@ -212,8 +222,10 @@ private struct BrowserTabContentView: View {
         } label: {
             if isExtracting {
                 ProgressView()
+                    .frame(width: 44, height: 32)
             } else {
-                Label("画像を抽出", systemImage: "photo.stack")
+                Image(systemName: "photo.stack")
+                    .frame(width: 44, height: 32)
             }
         }
         .disabled(isExtracting)
@@ -230,10 +242,13 @@ private struct BrowserTabContentView: View {
     private func extractImages() async {
         isExtracting = true
         defer { isExtracting = false }
+        AppLog.log("一括抽出開始: \(controller.urlString)")
         do {
             extractedImages = try await controller.extractImages(withBackgrounds: true)
+            AppLog.log("一括抽出結果: \(extractedImages.count)件")
             showGrid = true
         } catch {
+            AppLog.log("一括抽出失敗: \(error.localizedDescription)", isError: true)
             extractionError = "ページから画像を読み取れませんでした。"
         }
     }
