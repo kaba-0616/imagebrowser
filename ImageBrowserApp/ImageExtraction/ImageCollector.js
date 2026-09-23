@@ -22,9 +22,35 @@
     var RESIZED_PATH = /^(.*\/[0-9a-f]{16,})\/\d+_\d+_\d+(\.(?:jpe?g|png|gif))$/i;
     var REQUESTED_BOX = /\/(\d+)_\d+_\d+\.[a-z]+$/i;
 
+    // モデルプレス(img-mdpr.freetls.fastly.net)・音楽ナタリー(ogre.natalie.mu)
+    // で確認したクエリパラメータ型のリサイズ指定。パスにhashが埋め込まれる
+    // RESIZED_PATHとは別方式で、ドメインごとにキー名が違うため、確認できた
+    // 2ホストだけに限定したホワイトリストとして持つ(未確認のサイトへ
+    // 汎用的にクエリ除去をかけると、認証・署名用のクエリまで壊しかねない)。
+    var QUERY_RESIZE_HOSTS = {
+        "img-mdpr.freetls.fastly.net": ["width", "height", "crop", "quality", "enable", "auto"],
+        "ogre.natalie.mu": ["impolicy", "width", "height"]
+    };
+
+    function originalOfQuery(parsed) {
+        var keys = QUERY_RESIZE_HOSTS[parsed.hostname];
+        if (!keys || !parsed.search) { return null; }
+        var full = new URL(parsed.href);
+        var changed = false;
+        for (var i = 0; i < keys.length; i++) {
+            if (full.searchParams.has(keys[i])) {
+                full.searchParams.delete(keys[i]);
+                changed = true;
+            }
+        }
+        return changed ? full.href : null;
+    }
+
     var LAZY_ATTRS = [
         "data-src", "data-original", "data-lazy-src", "data-lazy",
-        "data-image", "data-url", "data-hi-res-src", "data-large-file"
+        "data-image", "data-url", "data-hi-res-src", "data-large-file",
+        // realsound.jp(lozadライブラリ)で確認した、背景画像を遅延指定する属性。
+        "data-background-image"
     ];
 
     // これより小さい箱に描かれたCSS背景画像はスプライト/アイコンとみなす。
@@ -94,7 +120,7 @@
             if (UI_ASSET_PATH.test(url)) { return; }
 
             var rendered = null;
-            var original = originalOf(parsed);
+            var original = originalOf(parsed) || originalOfQuery(parsed);
             if (original) {
                 rendered = url;
                 url = original;
@@ -163,6 +189,14 @@
             var svgUse = root.querySelectorAll("image");
             for (var u = 0; u < svgUse.length; u++) {
                 addURL(svgUse[u].getAttribute("href") || svgUse[u].getAttribute("xlink:href"), 0, 0, "dom");
+            }
+
+            // realsound.jp(lozadライブラリ)で確認した遅延背景画像属性。
+            // <div data-background-image="...">のように非imgのlazy属性として
+            // 使われるため、img専用のfromLazyAttrsとは別にここで拾う。
+            var bgAttrEls = root.querySelectorAll("[data-background-image]");
+            for (var ba = 0; ba < bgAttrEls.length; ba++) {
+                addURL(bgAttrEls[ba].getAttribute("data-background-image"), 0, 0, "background");
             }
 
             if (!withBackgrounds) { return; }

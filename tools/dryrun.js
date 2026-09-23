@@ -137,6 +137,55 @@ function checkJSONSafe(images) {
 }
 
 // ---------------------------------------------------------------------------
+// クエリパラメータ型リサイズURL(モデルプレス/ナタリー)。確認できた2ホスト
+// のみでwidth/height/crop等のクエリを外し、無関係なサイトには影響しない。
+// ---------------------------------------------------------------------------
+{
+    const els = [
+        El("img", { src: "https://img-mdpr.freetls.fastly.net/article/1234/wm/5678.jpg"
+            + "?width=712&enable=upscale&crop=712:474,offset-x50,offset-y50&auto=webp&quality=70" },
+            { nw: 712, nh: 474 }),
+        El("img", { src: "https://ogre.natalie.mu/media/news/music/0001/gallery/1.jpg"
+            + "?impolicy=thumb_fit&width=100&height=100" }, { nw: 100, nh: 100 }),
+        // 対応ホスト以外は、同じクエリキーが付いていても触らない。
+        El("img", { src: "https://example.com/photo.jpg?width=100" }, { nw: 100, nh: 100 })
+    ];
+    const collector = run("https://mdpr.jp/interview/detail/1", els);
+    const images = collector.collect(false);
+    console.log("\nクエリ型リサイズURL(mdpr/natalie):");
+    checkJSONSafe(images);
+    const mdpr = images.find(i => i.url.includes("img-mdpr.freetls.fastly.net"));
+    const natalie = images.find(i => i.url.includes("ogre.natalie.mu"));
+    const other = images.find(i => i.url.includes("example.com"));
+    check("mdprのリサイズクエリが外れる",
+          !!mdpr && mdpr.url === "https://img-mdpr.freetls.fastly.net/article/1234/wm/5678.jpg",
+          mdpr && mdpr.url);
+    check("natalieのリサイズクエリが外れる",
+          !!natalie && natalie.url === "https://ogre.natalie.mu/media/news/music/0001/gallery/1.jpg",
+          natalie && natalie.url);
+    check("対応外ホストのクエリはそのまま",
+          !!other && other.url === "https://example.com/photo.jpg?width=100", other && other.url);
+}
+
+// ---------------------------------------------------------------------------
+// data-background-image属性(realsound.jpのlozadライブラリ)。imgではなく
+// divに付くため、fromLazyAttrsとは別の専用スキャンで拾う。
+// ---------------------------------------------------------------------------
+{
+    const els = [
+        El("div", { "data-background-image": "https://realsound.jp/wp-content/uploads/author-158x118.jpeg" },
+            { rect: { width: 158, height: 118 } })
+    ];
+    const collector = run("https://realsound.jp/music/article", els);
+    const images = collector.collect(true);
+    console.log("\ndata-background-image属性:");
+    checkJSONSafe(images);
+    check("divのdata-background-imageを拾う",
+          images.some(i => i.url === "https://realsound.jp/wp-content/uploads/author-158x118.jpeg"),
+          images.map(i => i.url).join(", "));
+}
+
+// ---------------------------------------------------------------------------
 // findImageAt: 長押し座標からimg要素のURLを引ける。
 // ---------------------------------------------------------------------------
 {
