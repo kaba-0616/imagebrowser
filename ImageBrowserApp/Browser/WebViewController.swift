@@ -1,4 +1,5 @@
 import WebKit
+import UIKit
 import Combine
 
 /// Owns one WKWebView instance (one per browser tab -- see TabManager). A
@@ -18,6 +19,10 @@ final class WebViewController: NSObject, ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var estimatedProgress: Double = 0
     @Published private(set) var pageTitle: String = ""
+    /// A snapshot of the page, refreshed after each load finishes -- used by
+    /// TabsView's grid so each cell shows the actual site instead of a
+    /// generic placeholder icon.
+    @Published private(set) var thumbnail: UIImage?
     /// Set when the long-press gesture resolves to an image URL on the page.
     /// BrowserView watches this to present the save menu.
     @Published var longPressedImageURL: URL?
@@ -209,6 +214,20 @@ final class WebViewController: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Thumbnail
+
+    private func captureThumbnail() {
+        let config = WKSnapshotConfiguration()
+        webView.takeSnapshot(with: config) { [weak self] image, error in
+            guard let self else { return }
+            if let error {
+                AppLog.log("タブプレビューの取得失敗: \(error.localizedDescription)", isError: true)
+                return
+            }
+            self.thumbnail = image
+        }
+    }
+
     private static func loadCollectorScript() -> String? {
         guard let url = Bundle.main.url(forResource: "ImageCollector", withExtension: "js") else {
             assertionFailure("ImageCollector.js is missing from the app bundle")
@@ -236,6 +255,7 @@ extension WebViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         AppLog.log("読み込み完了: \(webView.url?.absoluteString ?? "?")")
+        captureThumbnail()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

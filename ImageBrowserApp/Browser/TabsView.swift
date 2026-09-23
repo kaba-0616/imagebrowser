@@ -69,12 +69,19 @@ private struct TabCell: View {
             .padding(8)
 
             ZStack {
-                Rectangle().fill(Color(.secondarySystemBackground))
-                Image(systemName: "safari")
-                    .font(.system(size: 32))
-                    .foregroundColor(.secondary)
+                if let thumbnail = controller.thumbnail {
+                    Image(uiImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Rectangle().fill(Color(.secondarySystemBackground))
+                    Image(systemName: "safari")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary)
+                }
             }
             .frame(height: 100)
+            .clipped()
 
             Text(controller.urlString)
                 .font(.caption2)

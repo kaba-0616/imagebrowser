@@ -85,10 +85,19 @@ final class TabManager: ObservableObject {
         activeTabID = restored.indices.contains(savedIndex) ? restored[savedIndex].id : restored.first?.id
     }
 
+    /// Reads `webView.url` directly rather than `controller.urlString` --
+    /// `urlString` mirrors it through a KVO callback wrapped in `Task { @MainActor
+    /// in ... }`, which lags webView.url by at least one runloop tick. When
+    /// two tabs both start loading at once (most notably right after
+    /// restoring tabs on launch), saveState() could fire from one tab's
+    /// already-resolved urlString while the other tab's mirror hadn't
+    /// caught up yet, and its still-empty urlString got misread as "no
+    /// page loaded" and overwritten with the home URL, permanently losing
+    /// that tab's real page on the next restart. webView.url has no such
+    /// lag since it's read straight from WebKit, not our own mirror.
     private func saveState() {
-        let urls = tabs.map { $0.controller.urlString.isEmpty
-            ? BrowserDefaults.homeURL.absoluteString
-            : $0.controller.urlString
+        let urls = tabs.map { tab -> String in
+            tab.controller.webView.url?.absoluteString ?? BrowserDefaults.homeURL.absoluteString
         }
         UserDefaults.standard.set(urls, forKey: Self.savedURLsKey)
         let index = activeTabID.flatMap { id in tabs.firstIndex { $0.id == id } } ?? 0
