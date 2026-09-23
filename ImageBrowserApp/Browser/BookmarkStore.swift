@@ -28,10 +28,12 @@ final class BookmarkStore: ObservableObject {
 
     // TODO: 一時的な実装。画像検出ロジックの実機検証が終わったら削除する。
     // 検証対象サイト一覧をブックマークに仕込んでおき、毎回URLを手入力せずに
-    // 巡回できるようにするためのもの。初回のみ(ブックマークが完全に空の時)
-    // だけ投入し、ユーザーが自分で整理した後は再投入しない。
+    // 巡回できるようにするためのもの。アプリ生涯で一度だけ(手動でブックマーク
+    // 済みかどうかに関わらず)既存のブックマークに追加投入する。以降は
+    // testingSitesSeededフラグだけで判定するので、後で手動削除しても
+    // 再投入はされない。
     private func seedTestingSitesIfNeeded() {
-        guard bookmarks.isEmpty, !UserDefaults.standard.bool(forKey: "testingSitesSeeded") else { return }
+        guard !UserDefaults.standard.bool(forKey: "testingSitesSeeded") else { return }
         UserDefaults.standard.set(true, forKey: "testingSitesSeeded")
 
         let sites: [(String, String)] = [
@@ -53,10 +55,11 @@ final class BookmarkStore: ObservableObject {
             ("AKB48", "https://www.akb48.co.jp/"),
             ("=LOVE(イコラブ)", "https://sp.equal-love.jp/")
         ]
-        bookmarks = sites.compactMap { title, urlString in
+        let seeded = sites.compactMap { title, urlString -> Bookmark? in
             guard let url = URL(string: urlString) else { return nil }
             return Bookmark(title: title, url: url)
         }
+        bookmarks.append(contentsOf: seeded)
         save()
     }
 

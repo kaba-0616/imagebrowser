@@ -4,24 +4,25 @@ struct TabsView: View {
     @ObservedObject var tabManager: TabManager
     let onClose: () -> Void
 
+    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
+
     var body: some View {
         NavigationView {
-            List {
-                ForEach(tabManager.tabs) { tab in
-                    TabRow(
-                        controller: tab.controller,
-                        isActive: tab.id == tabManager.activeTabID,
-                        onSelect: {
-                            tabManager.selectTab(tab.id)
-                            onClose()
-                        }
-                    )
-                }
-                .onDelete { indexSet in
-                    for index in indexSet {
-                        tabManager.closeTab(tabManager.tabs[index].id)
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(tabManager.tabs) { tab in
+                        TabCell(
+                            controller: tab.controller,
+                            isActive: tab.id == tabManager.activeTabID,
+                            onSelect: {
+                                tabManager.selectTab(tab.id)
+                                onClose()
+                            },
+                            onClose: { tabManager.closeTab(tab.id) }
+                        )
                     }
                 }
+                .padding(12)
             }
             .navigationTitle("タブ (\(tabManager.tabs.count))")
             .navigationBarTitleDisplayMode(.inline)
@@ -45,30 +46,48 @@ struct TabsView: View {
 
 /// Observes the tab's controller directly -- BrowserTab itself has no
 /// @Published properties of its own, so observing it wouldn't refresh this
-/// row when the controller's pageTitle/urlString change underneath it.
-private struct TabRow: View {
+/// cell when the controller's pageTitle/urlString change underneath it.
+private struct TabCell: View {
     @ObservedObject var controller: WebViewController
     let isActive: Bool
     let onSelect: () -> Void
+    let onClose: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(controller.pageTitle.isEmpty ? "新しいタブ" : controller.pageTitle)
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    Text(controller.urlString)
-                        .font(.caption)
+                Text(controller.pageTitle.isEmpty ? "新しいタブ" : controller.pageTitle)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .foregroundColor(.primary)
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark.circle.fill")
                         .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-                if isActive {
-                    Spacer()
-                    Image(systemName: "checkmark")
-                        .foregroundColor(.accentColor)
                 }
             }
+            .padding(8)
+
+            ZStack {
+                Rectangle().fill(Color(.secondarySystemBackground))
+                Image(systemName: "safari")
+                    .font(.system(size: 32))
+                    .foregroundColor(.secondary)
+            }
+            .frame(height: 100)
+
+            Text(controller.urlString)
+                .font(.caption2)
+                .lineLimit(1)
+                .foregroundColor(.secondary)
+                .padding(8)
         }
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isActive ? Color.accentColor : Color(.separator), lineWidth: isActive ? 2 : 1)
+        )
+        .onTapGesture(perform: onSelect)
     }
 }

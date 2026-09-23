@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var isRestoring = false
     @State private var restoreMessage: String?
     @State private var showSaveLog = false
+    @State private var adBlockEnabled = AdBlockStore.isEnabled
 
     var body: some View {
         NavigationView {
@@ -18,6 +19,16 @@ struct SettingsView: View {
                             Text(engine.displayName).tag(engine.rawValue)
                         }
                     }
+                }
+
+                Section("広告ブロック") {
+                    Toggle("ページ内の広告をブロック", isOn: Binding(
+                        get: { adBlockEnabled },
+                        set: {
+                            adBlockEnabled = $0
+                            AdBlockStore.isEnabled = $0
+                        }
+                    ))
                 }
 
                 Section("Pro") {

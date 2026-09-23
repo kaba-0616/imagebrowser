@@ -27,6 +27,8 @@ final class WebViewController: NSObject, ObservableObject {
     @Published private(set) var longPressLocation: CGPoint?
 
     private var kvoObservations: [NSKeyValueObservation] = []
+    private var adBlockRuleList: WKContentRuleList?
+    private var adBlockObserver: NSObjectProtocol?
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -69,10 +71,14 @@ final class WebViewController: NSObject, ObservableObject {
         webView.uiDelegate = self
         observeWebView()
         installLongPressRecognizer()
+        installAdBlockIfNeeded()
     }
 
     deinit {
         kvoObservations.forEach { $0.invalidate() }
+        if let adBlockObserver {
+            NotificationCenter.default.removeObserver(adBlockObserver)
+        }
     }
 
     // MARK: - Navigation
@@ -170,6 +176,37 @@ final class WebViewController: NSObject, ObservableObject {
     func dismissLongPressMenu() {
         longPressedImageURL = nil
         longPressLocation = nil
+    }
+
+    // MARK: - Ad block
+
+    /// Compiling the rule list is async (WKContentRuleListStore's only API),
+    /// so it's applied once the shared compile finishes rather than at
+    /// WKWebView construction time. Listening for UserDefaults changes lets
+    /// the Settings toggle take effect on already-open tabs immediately,
+    /// without each tab needing to be told explicitly.
+    private func installAdBlockIfNeeded() {
+        Task { [weak self] in
+            guard let self, let ruleList = await AdBlockManager.shared.ruleList() else { return }
+            self.adBlockRuleList = ruleList
+            self.applyAdBlockState()
+        }
+        adBlockObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.applyAdBlockState() }
+        }
+    }
+
+    private func applyAdBlockState() {
+        guard let adBlockRuleList else { return }
+        let contentController = webView.configuration.userContentController
+        contentController.remove(adBlockRuleList)
+        if AdBlockStore.isEnabled {
+            contentController.add(adBlockRuleList)
+        }
     }
 
     private static func loadCollectorScript() -> String? {
