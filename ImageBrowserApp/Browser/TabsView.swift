@@ -74,12 +74,17 @@ private struct TabCell: View {
             // tap, so the X silently reopened the tab instead of closing it.
             VStack(alignment: .leading, spacing: 0) {
                 ZStack {
+                    Rectangle().fill(Color(.secondarySystemBackground))
                     if let thumbnail = controller.thumbnail {
+                        // scaledToFit, not Fill: the snapshot is the whole
+                        // page viewport (tall and narrow), so filling a
+                        // ~150x100 cell would zoom into a thin, unreadable
+                        // sliver of it (a paragraph of body text blown up
+                        // to fill the frame) instead of showing the page.
                         Image(uiImage: thumbnail)
                             .resizable()
-                            .scaledToFill()
+                            .scaledToFit()
                     } else {
-                        Rectangle().fill(Color(.secondarySystemBackground))
                         Image(systemName: "safari")
                             .font(.system(size: 32))
                             .foregroundColor(.secondary)
