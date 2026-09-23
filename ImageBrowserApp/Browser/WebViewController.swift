@@ -118,6 +118,15 @@ final class WebViewController: NSObject, ObservableObject {
         let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         recognizer.minimumPressDuration = 0.45
         recognizer.delegate = self
+        // Without these three set to false, UIKit's default touch-forwarding
+        // rules let this recognizer swallow ordinary taps inside the page --
+        // search boxes, buttons, links all stopped responding, because a
+        // gesture recognizer added to WKWebView's scrollView competes with
+        // WebKit's own internal tap-to-focus recognizer for the same
+        // touches. This recognizer must observe without ever intercepting.
+        recognizer.cancelsTouchesInView = false
+        recognizer.delaysTouchesBegan = false
+        recognizer.delaysTouchesEnded = false
         webView.scrollView.addGestureRecognizer(recognizer)
     }
 
