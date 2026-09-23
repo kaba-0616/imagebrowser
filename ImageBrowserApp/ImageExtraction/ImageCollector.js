@@ -214,29 +214,48 @@
         return images;
     }
 
-    // 長押しされた座標から画像URLを1件特定する。img/picture/背景画像の順で
-    // 直近の要素を辿る。
-    function findImageAt(x, y) {
-        var el;
-        try { el = document.elementFromPoint(x, y); } catch (e) { return null; }
-        if (!el) { return null; }
+    function imageURLFromElement(node) {
+        if (node.tagName === "IMG") {
+            var url = node.currentSrc || node.src
+                || bestFromSrcset(node.getAttribute("srcset"))
+                || fromLazyAttrs(node);
+            if (url) { return resolve(url); }
+        }
+        var style;
+        try { style = getComputedStyle(node); } catch (e) { style = null; }
+        var bg = style && style.backgroundImage;
+        if (bg && bg.indexOf("url(") !== -1) {
+            var m = /url\(["']?([^"')]+)["']?\)/.exec(bg);
+            if (m) { return resolve(m[1]); }
+        }
+        return null;
+    }
 
-        var node = el;
-        for (var steps = 0; steps < 8 && node; steps++) {
-            if (node.tagName === "IMG") {
-                var url = node.currentSrc || node.src
-                    || bestFromSrcset(node.getAttribute("srcset"))
-                    || fromLazyAttrs(node);
-                if (url) { return resolve(url); }
+    // 長押しされた座標から画像URLを1件特定する。カード型レイアウトでは
+    // クリック計測用の透明な<a>がimgの真上に重なっていることが多く、
+    // 「先頭要素から親を辿る」だけでは画像を素通りしてしまう。
+    // elementsFromPointでその座標に重なっている全要素(手前から奥へ)を
+    // 取得し、それぞれについて自身と祖先8階層を調べる。
+    function findImageAt(x, y) {
+        var stack;
+        try {
+            stack = document.elementsFromPoint(x, y);
+        } catch (e) {
+            stack = [];
+        }
+        if (!stack || !stack.length) {
+            var single;
+            try { single = document.elementFromPoint(x, y); } catch (e2) { single = null; }
+            stack = single ? [single] : [];
+        }
+
+        for (var i = 0; i < stack.length; i++) {
+            var node = stack[i];
+            for (var steps = 0; steps < 8 && node; steps++) {
+                var found = imageURLFromElement(node);
+                if (found) { return found; }
+                node = node.parentElement;
             }
-            var style;
-            try { style = getComputedStyle(node); } catch (e) { style = null; }
-            var bg = style && style.backgroundImage;
-            if (bg && bg.indexOf("url(") !== -1) {
-                var m = /url\(["']?([^"')]+)["']?\)/.exec(bg);
-                if (m) { return resolve(m[1]); }
-            }
-            node = node.parentElement;
         }
         return null;
     }

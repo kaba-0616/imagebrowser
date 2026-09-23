@@ -52,6 +52,11 @@ function run(pageURL, els, opts = {}) {
         },
         elementFromPoint(x, y) {
             return opts.elementAt ? opts.elementAt(x, y) : null;
+        },
+        elementsFromPoint(x, y) {
+            if (opts.elementsAt) { return opts.elementsAt(x, y); }
+            const single = opts.elementAt ? opts.elementAt(x, y) : null;
+            return single ? [single] : [];
         }
     };
     const ctx = {
@@ -144,6 +149,22 @@ function checkJSONSafe(images) {
     console.log("\nfindImageAt:");
     check("座標が一致すればURLを返す", hit === "https://example.com/hit.jpg", String(hit));
     check("要素が無ければnullを返す", miss === null, String(miss));
+}
+
+// ---------------------------------------------------------------------------
+// findImageAt: Yahoo!ニュースのようなカード型レイアウトで、クリック計測用の
+// 透明な<a>がimgの真上に重なっているケース。elementsFromPointで両方が
+// 返り、手前の要素(オーバーレイ)からは何も取れず、その下のimgから取れる。
+// ---------------------------------------------------------------------------
+{
+    const overlay = El("a", { href: "#" }, { rect: { width: 300, height: 200 } });
+    const image = El("img", { src: "https://example.com/card-thumb.jpg" }, { nw: 300, nh: 200 });
+    const collector = run("https://example.com/list", [], {
+        elementsAt: (x, y) => (x === 278 && y === 153) ? [overlay, image] : []
+    });
+    const hit = collector.findImageAt(278, 153);
+    console.log("\nfindImageAt(オーバーレイの下の画像):");
+    check("重なりの奥のimgまで拾える", hit === "https://example.com/card-thumb.jpg", String(hit));
 }
 
 console.log(failures ? `\n${failures}件 失敗` : "\nすべて通過");
