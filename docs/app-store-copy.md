@@ -41,7 +41,7 @@ ImageBrowserは、画像の保存に特化したWebブラウザです。
 本アプリはアカウント登録を必要とせず、保存した画像はすべて利用者のiPhone/iPad内にのみ保存されます。開発者を含む第三者のサーバーへ画像が送信されることはありません。
 
 利用規約(EULA): https://www.apple.com/legal/internet-services/itunes/dev/stdeula/
-プライバシーポリシー: https://kaba-0616.github.io/imagebrowser/privacy.html
+プライバシーポリシー: https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99
 ```
 (約600文字、余裕あり)
 
