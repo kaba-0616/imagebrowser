@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var isRestoring = false
     @State private var restoreMessage: String?
     @State private var showSaveLog = false
+    @State private var showPaywall = false
     @State private var adBlockEnabled = AdBlockStore.isEnabled
 
     var body: some View {
@@ -37,6 +38,9 @@ struct SettingsView: View {
                         Spacer()
                         Text(store.isPro ? "Pro" : "無料")
                             .foregroundColor(.secondary)
+                    }
+                    if !store.isPro {
+                        Button("Proにアップグレード") { showPaywall = true }
                     }
                     Button {
                         Task {
@@ -81,6 +85,9 @@ struct SettingsView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { onClose() }
                 }
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView(store: store) { showPaywall = false }
             }
             .sheet(isPresented: $showSaveLog) {
                 SaveLogView { showSaveLog = false }

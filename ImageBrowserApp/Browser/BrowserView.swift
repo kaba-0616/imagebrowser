@@ -60,6 +60,7 @@ private struct BrowserTabContentView: View {
     @State private var extractedImages: [PageImage] = []
     @State private var showGrid = false
     @State private var showPaywall = false
+    @ObservedObject private var adConsent = AdConsent.shared
     @State private var extractionError: String?
 
     var body: some View {
@@ -93,7 +94,7 @@ private struct BrowserTabContentView: View {
             // A fixed-height bar below the content, not an overlay on top of
             // it -- an overlay would sit over the bottom of every page,
             // covering whatever the site placed there.
-            if !store.isPro {
+            if !store.isPro && adConsent.isReady {
                 AdBannerView(.bottom)
                     .frame(height: 50)
             }
@@ -105,6 +106,7 @@ private struct BrowserTabContentView: View {
         .onAppear {
             addressText = controller.urlString
         }
+        .task { await adConsent.start() }
         .sheet(isPresented: $showGrid) {
             ImageGridView(images: extractedImages, pageTitle: controller.pageTitle) {
                 showGrid = false
