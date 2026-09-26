@@ -37,6 +37,7 @@ final class BookmarkStore: ObservableObject {
         UserDefaults.standard.set(true, forKey: "testingSitesSeeded")
 
         let sites: [(String, String)] = [
+            ("ImageBrowserデモ(審査・撮影用)", "https://kaba-0616.github.io/imagebrowser-demo/demo.html"),
             ("Yahoo!ニュース", "https://news.yahoo.co.jp/"),
             ("livedoor NEWS", "https://news.livedoor.com/"),
             ("ORICON NEWS", "https://www.oricon.co.jp/news/"),
