@@ -58,6 +58,11 @@ struct PaywallView: View {
                     }
                     .font(.footnote)
                     .disabled(purchasing != nil)
+
+                    Link("プランの変更・解約は「設定」アプリのサブスクリプションから行えます", destination: URL(string: "itms-apps://apps.apple.com/account/subscriptions")!)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
                 }
                 .padding()
             }
