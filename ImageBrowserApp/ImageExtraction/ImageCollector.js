@@ -143,13 +143,21 @@
     // Resource Timing APIから拾う。Canvas描画アプリでは、写真データ自体は
     // 普通にHTTPで取得されて画面に描かれているので、DOM収集の穴を
     // この方法で埋められる(幅/高さの情報は無いため0のまま)。
+    // さくら坂46メッセージ(CloudFront配信)で確認した構造: 同じ写真が
+    // /messages/files/<name>.jpg(フルサイズ)と/messages/thumbnails/<name>.jpg
+    // (縮小版)の2本立てで別URLとして両方読み込まれる。フルサイズは
+    // 同じ通信履歴スキャンで別途拾えるので、縮小版側は除外して重複を防ぐ。
+    var THUMBNAIL_PATH = /\/thumbnails\//i;
+
     function resourceTimingImages() {
         var out = [];
         try {
             var entries = performance.getEntriesByType("resource");
             for (var i = 0; i < entries.length; i++) {
                 var url = entries[i].name;
-                if (/\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(url)) { out.push(url); }
+                if (!/\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(url)) { continue; }
+                if (THUMBNAIL_PATH.test(url)) { continue; }
+                out.push(url);
             }
         } catch (e) {}
         return out;
