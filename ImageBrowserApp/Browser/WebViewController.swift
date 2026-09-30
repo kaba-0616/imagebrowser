@@ -30,13 +30,20 @@ final class WebViewController: NSObject, ObservableObject {
     /// `webView` itself -- lets the save menu anchor near the touch point
     /// the way Safari's own does, instead of a generic bottom sheet.
     @Published private(set) var longPressLocation: CGPoint?
-    /// A popup window opened via `window.open()`/`target="_blank"` with a
+    /// Popup windows opened via `window.open()`/`target="_blank"` with a
     /// real opener relationship (see `createWebViewWith` below). BrowserView
-    /// presents this as a sheet while it's non-nil. Most sites never trigger
-    /// this -- ordinary links are just loaded in the same view (see that
-    /// method) -- it only exists for flows that specifically need a real
-    /// second window, chiefly OAuth popups like Google Sign-In.
-    @Published var popupWebView: WKWebView?
+    /// presents these as stacked sheets while the array is non-empty. Most
+    /// sites never trigger this -- ordinary links are just loaded in the
+    /// same view (see that method) -- it exists for flows that specifically
+    /// need a real window, chiefly OAuth popups like Google Sign-In.
+    ///
+    /// This is a stack, not a single optional, because those flows are
+    /// often two levels deep: a login-chooser popup that itself opens a
+    /// second popup for the actual provider (Google, etc). A single
+    /// `WKWebView?` here would get overwritten -- and the first popup
+    /// deallocated -- the moment the second one opened, breaking whatever
+    /// it was waiting on from its own opener chain.
+    @Published var popupStack: [WKWebView] = []
 
     private var kvoObservations: [NSKeyValueObservation] = []
     private var adBlockRuleList: WKContentRuleList?
@@ -326,18 +333,16 @@ extension WebViewController: WKUIDelegate {
         let popup = WKWebView(frame: .zero, configuration: configuration)
         popup.navigationDelegate = self
         popup.uiDelegate = self
-        popupWebView = popup
+        popupStack.append(popup)
         return popup
     }
 
-    /// Fires when the popup's own JS calls `window.close()` -- OAuth popups
-    /// do this once they've posted their result back. Dismiss it the same
-    /// way whether JS closed it or the user tapped the sheet's own close
-    /// button.
+    /// Fires when a popup's own JS calls `window.close()` -- OAuth popups
+    /// do this once they've posted their result back. Only removes that one
+    /// entry (not the whole stack), since a popup two levels deep can close
+    /// itself while its parent popup is still waiting to hear from it.
     func webViewDidClose(_ webView: WKWebView) {
-        if webView === popupWebView {
-            popupWebView = nil
-        }
+        popupStack.removeAll { $0 === webView }
     }
 }
 

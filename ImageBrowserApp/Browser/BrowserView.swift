@@ -1,5 +1,47 @@
 import SwiftUI
 
+/// Presents `controller.popupStack` as sheets stacked on top of each other,
+/// one level of recursion per popup -- a login-chooser popup that opens a
+/// second popup for the actual provider shows as a sheet-on-a-sheet, each
+/// closable independently. `depth` is which stack slot this instance
+/// watches; it recurses onto `depth + 1` from inside its own sheet so a
+/// deeper popup appears nested above the one that opened it.
+private struct PopupStackView: View {
+    @ObservedObject var controller: WebViewController
+    let depth: Int
+
+    var body: some View {
+        Color.clear
+            .sheet(isPresented: Binding(
+                get: { controller.popupStack.count > depth },
+                set: { if !$0 { closeFromHere() } }
+            )) {
+                if controller.popupStack.count > depth {
+                    NavigationView {
+                        WebViewRepresentable(webView: controller.popupStack[depth])
+                            .navigationTitle("サインイン")
+                            .navigationBarTitleDisplayMode(.inline)
+                            .toolbar {
+                                ToolbarItem(placement: .navigationBarLeading) {
+                                    Button("閉じる") { closeFromHere() }
+                                }
+                            }
+                            .background(PopupStackView(controller: controller, depth: depth + 1))
+                    }
+                    .navigationViewStyle(.stack)
+                }
+            }
+    }
+
+    /// Closes this popup and anything opened on top of it -- a deeper popup
+    /// can't outlive the one that opened it.
+    private func closeFromHere() {
+        while controller.popupStack.count > depth {
+            controller.popupStack.removeLast()
+        }
+    }
+}
+
 struct BrowserView: View {
     @StateObject private var tabManager = TabManager()
     @StateObject private var store = StoreManager()
@@ -115,24 +157,7 @@ private struct BrowserTabContentView: View {
         .sheet(isPresented: $showPaywall) {
             PaywallView(store: store) { showPaywall = false }
         }
-        .sheet(isPresented: Binding(
-            get: { controller.popupWebView != nil },
-            set: { if !$0 { controller.popupWebView = nil } }
-        )) {
-            if let popup = controller.popupWebView {
-                NavigationView {
-                    WebViewRepresentable(webView: popup)
-                        .navigationTitle("サインイン")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarLeading) {
-                                Button("閉じる") { controller.popupWebView = nil }
-                            }
-                        }
-                }
-                .navigationViewStyle(.stack)
-            }
-        }
+        .background(PopupStackView(controller: controller, depth: 0))
         .alert("抽出に失敗しました", isPresented: Binding(
             get: { extractionError != nil },
             set: { if !$0 { extractionError = nil } }
