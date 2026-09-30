@@ -30,20 +30,19 @@ final class WebViewController: NSObject, ObservableObject {
     /// `webView` itself -- lets the save menu anchor near the touch point
     /// the way Safari's own does, instead of a generic bottom sheet.
     @Published private(set) var longPressLocation: CGPoint?
-    /// Popup windows opened via `window.open()`/`target="_blank"` with a
-    /// real opener relationship (see `createWebViewWith` below). BrowserView
-    /// presents these as stacked sheets while the array is non-empty. Most
-    /// sites never trigger this -- ordinary links are just loaded in the
-    /// same view (see that method) -- it exists for flows that specifically
-    /// need a real window, chiefly OAuth popups like Google Sign-In.
-    ///
-    /// This is a stack, not a single optional, because those flows are
-    /// often two levels deep: a login-chooser popup that itself opens a
-    /// second popup for the actual provider (Google, etc). A single
-    /// `WKWebView?` here would get overwritten -- and the first popup
-    /// deallocated -- the moment the second one opened, breaking whatever
-    /// it was waiting on from its own opener chain.
-    @Published var popupStack: [WKWebView] = []
+    /// Set by TabManager right after creating this controller. `window.open()`/
+    /// `target="_blank"` (see `createWebViewWith` below) calls this instead of
+    /// loading in place, so the new page becomes an ordinary tab -- matching
+    /// how Safari and other browsers actually handle it. This isn't only a
+    /// UI preference: some sites (Google Sign-In's OAuth popup among them)
+    /// keep using that window as their real, ongoing surface rather than a
+    /// short-lived dialog, so it needs the full tab chrome (address bar,
+    /// back/forward, long-press save, ...), not a bare modal sheet.
+    var onOpenTab: ((WKWebView) -> Void)?
+    /// Set by TabManager. Fires when this tab's own JS calls `window.close()`
+    /// (an OAuth popup-turned-tab does this once it's posted its result back
+    /// to whichever tab opened it).
+    var onRequestClose: (() -> Void)?
 
     private var kvoObservations: [NSKeyValueObservation] = []
     private var adBlockRuleList: WKContentRuleList?
@@ -86,6 +85,23 @@ final class WebViewController: NSObject, ObservableObject {
         configuration.userContentController = userContentController
 
         webView = WKWebView(frame: .zero, configuration: configuration)
+        super.init()
+        commonSetup()
+    }
+
+    /// Wraps a WKWebView WebKit already created for a `window.open()`/
+    /// `target="_blank"` popup (see `createWebViewWith`). It arrives with the
+    /// opener's configuration already attached -- same scripts, ad-block
+    /// rules and data store -- since that's what WebKit requires to keep
+    /// `window.opener` working, so there's nothing to build here, just the
+    /// same delegate/observer wiring any other tab gets.
+    init(popupWebView: WKWebView) {
+        webView = popupWebView
+        super.init()
+        commonSetup()
+    }
+
+    private func commonSetup() {
         webView.allowsBackForwardNavigationGestures = true
         // The built-in long-press preview/menu would otherwise compete with
         // our own gesture recognizer below, and its behavior is subject to
@@ -93,9 +109,6 @@ final class WebViewController: NSObject, ObservableObject {
         // exactly the kind of site-side interference this app exists to
         // bypass.
         webView.allowsLinkPreview = false
-
-        super.init()
-
         webView.navigationDelegate = self
         webView.uiDelegate = self
         observeWebView()
@@ -310,18 +323,18 @@ extension WebViewController: WKUIDelegate {
         completionHandler(nil)
     }
 
-    /// Ordinary `target="_blank"` links open in the same view -- this app has
-    /// no tab model for arbitrary new windows. The one exception is a popup
-    /// that has actual JS on both sides expecting a window/opener
-    /// relationship (Google Sign-In's OAuth flow does this: the popup posts
-    /// its result back to `window.opener` once signed in). We can't tell
-    /// those apart in advance, so every `window.open()`/`target="_blank"`
-    /// gets a real second WKWebView; sites that don't need it just get an
-    /// extra sheet the user can close, but sites that do (Google among them)
-    /// now actually complete instead of hanging on a blank page forever.
+    /// `window.open()`/`target="_blank"` becomes a new tab (via `onOpenTab`,
+    /// wired up by TabManager) rather than loading in the same view or a
+    /// disposable modal. Earlier this returned nil and just loaded the URL
+    /// in place, which broke Google Sign-In and similar OAuth popups outright
+    /// (their result never has anywhere to be posted back to). A modal sheet
+    /// fixed the handshake but not the whole picture: several sites,
+    /// including that same sign-in flow once it completes, keep using the
+    /// opened window as an ordinary page from then on -- exactly what a real
+    /// tab (address bar, back/forward, everything else this app has) is for.
     ///
     /// Reusing the `configuration` WebKit hands us here (not building a new
-    /// one) is what makes `window.opener` resolve inside the popup -- that
+    /// one) is what makes `window.opener` resolve in the new tab -- that
     /// configuration carries the related-web-content-process link back to
     /// this page.
     func webView(
@@ -331,18 +344,15 @@ extension WebViewController: WKUIDelegate {
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
         let popup = WKWebView(frame: .zero, configuration: configuration)
-        popup.navigationDelegate = self
-        popup.uiDelegate = self
-        popupStack.append(popup)
+        onOpenTab?(popup)
         return popup
     }
 
-    /// Fires when a popup's own JS calls `window.close()` -- OAuth popups
-    /// do this once they've posted their result back. Only removes that one
-    /// entry (not the whole stack), since a popup two levels deep can close
-    /// itself while its parent popup is still waiting to hear from it.
+    /// Fires when this tab's own JS calls `window.close()` -- an OAuth
+    /// popup-turned-tab does this once it's posted its result back to
+    /// whichever tab opened it.
     func webViewDidClose(_ webView: WKWebView) {
-        popupStack.removeAll { $0 === webView }
+        onRequestClose?()
     }
 }
 
