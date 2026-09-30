@@ -290,12 +290,26 @@
         return null;
     }
 
+    function describeNode(node) {
+        var desc = node.tagName || "?";
+        if (node.id) { desc += "#" + node.id; }
+        if (node.className && typeof node.className === "string" && node.className.trim()) {
+            desc += "." + node.className.trim().split(/\s+/).join(".");
+        }
+        return desc;
+    }
+
     // 長押しされた座標から画像URLを1件特定する。カード型レイアウトでは
     // クリック計測用の透明な<a>がimgの真上に重なっていることが多く、
     // 「先頭要素から親を辿る」だけでは画像を素通りしてしまう。
     // elementsFromPointでその座標に重なっている全要素(手前から奥へ)を
     // 取得し、それぞれについて自身と祖先8階層を調べる。
-    function findImageAt(x, y) {
+    //
+    // trail(診断用)には、調べた各要素についてタグ/class、imgならsrcと
+    // lastRealSrcの値、その要素での判定結果を積んでいく。保護妨害の
+    // パターンはサイトごとに違う(すり替え・重なり・遅延等)ので、実機の
+    // ログからどのパターンかを直接読み取れるようにするためのもの。
+    function findImageAtDebug(x, y) {
         var stack;
         try {
             stack = document.elementsFromPoint(x, y);
@@ -308,15 +322,27 @@
             stack = single ? [single] : [];
         }
 
+        var trail = [];
         for (var i = 0; i < stack.length; i++) {
             var node = stack[i];
             for (var steps = 0; steps < 8 && node; steps++) {
+                var isImg = node.tagName === "IMG";
                 var found = imageURLFromElement(node);
-                if (found) { return found; }
+                trail.push({
+                    i: i, steps: steps, node: describeNode(node),
+                    currentSrc: isImg ? (node.currentSrc || node.src || null) : null,
+                    remembered: isImg ? (lastRealSrc.get(node) || null) : null,
+                    result: found || null
+                });
+                if (found) { return { url: found, trail: trail }; }
                 node = node.parentElement;
             }
         }
-        return null;
+        return { url: null, trail: trail };
+    }
+
+    function findImageAt(x, y) {
+        return findImageAtDebug(x, y).url;
     }
 
     function resolve(url) {
@@ -330,6 +356,7 @@
 
     window.__ImageBrowserCollector = {
         collect: collect,
-        findImageAt: findImageAt
+        findImageAt: findImageAt,
+        findImageAtDebug: findImageAtDebug
     };
 })();

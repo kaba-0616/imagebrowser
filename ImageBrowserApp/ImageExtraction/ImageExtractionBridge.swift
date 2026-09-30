@@ -21,10 +21,23 @@ enum ImageExtractionBridge {
     }
 
     /// Resolves a single image URL at a CSS point (used for long-press).
+    /// Also logs the full decision trail (every element examined at that
+    /// point, and what each yielded) to AppLog -- image-saving obstructions
+    /// vary a lot by site (overlay decoys, swapped src, lazy layers), and
+    /// reproducing them locally isn't possible, so this is what real-device
+    /// reports get diagnosed from instead of guessing.
     static func findImage(in webView: WKWebView, at point: CGPoint) async -> URL? {
-        let script = "window.__ImageBrowserCollector.findImageAt(\(point.x), \(point.y))"
+        let script = "JSON.stringify(window.__ImageBrowserCollector.findImageAtDebug(\(point.x), \(point.y)))"
         guard let result = try? await webView.evaluateJavaScript(script) else { return nil }
-        guard let urlString = result as? String else { return nil }
+        guard let jsonString = result as? String else { return nil }
+        AppLog.log("長押し判定の詳細: \(jsonString)")
+        guard let data = jsonString.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(FindImageDebugResult.self, from: data),
+              let urlString = decoded.url else { return nil }
         return URL(string: urlString)
+    }
+
+    private struct FindImageDebugResult: Decodable {
+        let url: String?
     }
 }
