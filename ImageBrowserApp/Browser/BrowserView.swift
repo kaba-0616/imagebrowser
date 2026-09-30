@@ -115,6 +115,24 @@ private struct BrowserTabContentView: View {
         .sheet(isPresented: $showPaywall) {
             PaywallView(store: store) { showPaywall = false }
         }
+        .sheet(isPresented: Binding(
+            get: { controller.popupWebView != nil },
+            set: { if !$0 { controller.popupWebView = nil } }
+        )) {
+            if let popup = controller.popupWebView {
+                NavigationView {
+                    WebViewRepresentable(webView: popup)
+                        .navigationTitle("サインイン")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button("閉じる") { controller.popupWebView = nil }
+                            }
+                        }
+                }
+                .navigationViewStyle(.stack)
+            }
+        }
         .alert("抽出に失敗しました", isPresented: Binding(
             get: { extractionError != nil },
             set: { if !$0 { extractionError = nil } }

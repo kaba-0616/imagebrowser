@@ -30,6 +30,13 @@ final class WebViewController: NSObject, ObservableObject {
     /// `webView` itself -- lets the save menu anchor near the touch point
     /// the way Safari's own does, instead of a generic bottom sheet.
     @Published private(set) var longPressLocation: CGPoint?
+    /// A popup window opened via `window.open()`/`target="_blank"` with a
+    /// real opener relationship (see `createWebViewWith` below). BrowserView
+    /// presents this as a sheet while it's non-nil. Most sites never trigger
+    /// this -- ordinary links are just loaded in the same view (see that
+    /// method) -- it only exists for flows that specifically need a real
+    /// second window, chiefly OAuth popups like Google Sign-In.
+    @Published var popupWebView: WKWebView?
 
     private var kvoObservations: [NSKeyValueObservation] = []
     private var adBlockRuleList: WKContentRuleList?
@@ -296,18 +303,41 @@ extension WebViewController: WKUIDelegate {
         completionHandler(nil)
     }
 
-    /// `target="_blank"` links open in the same view -- this app has no tab
-    /// model yet.
+    /// Ordinary `target="_blank"` links open in the same view -- this app has
+    /// no tab model for arbitrary new windows. The one exception is a popup
+    /// that has actual JS on both sides expecting a window/opener
+    /// relationship (Google Sign-In's OAuth flow does this: the popup posts
+    /// its result back to `window.opener` once signed in). We can't tell
+    /// those apart in advance, so every `window.open()`/`target="_blank"`
+    /// gets a real second WKWebView; sites that don't need it just get an
+    /// extra sheet the user can close, but sites that do (Google among them)
+    /// now actually complete instead of hanging on a blank page forever.
+    ///
+    /// Reusing the `configuration` WebKit hands us here (not building a new
+    /// one) is what makes `window.opener` resolve inside the popup -- that
+    /// configuration carries the related-web-content-process link back to
+    /// this page.
     func webView(
         _ webView: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        if let url = navigationAction.request.url {
-            webView.load(URLRequest(url: url))
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        popup.navigationDelegate = self
+        popup.uiDelegate = self
+        popupWebView = popup
+        return popup
+    }
+
+    /// Fires when the popup's own JS calls `window.close()` -- OAuth popups
+    /// do this once they've posted their result back. Dismiss it the same
+    /// way whether JS closed it or the user tapped the sheet's own close
+    /// button.
+    func webViewDidClose(_ webView: WKWebView) {
+        if webView === popupWebView {
+            popupWebView = nil
         }
-        return nil
     }
 }
 
