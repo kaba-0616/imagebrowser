@@ -129,7 +129,7 @@ final class PhotoSaver: ObservableObject {
             return
         }
 
-        guard let data = image.pngData() else {
+        guard let data = image.normalizedOrientation().pngData() else {
             appendLog("エンコード失敗", isError: true)
             state = .finished(succeeded: 0, failed: 1, message: "画像の保存に失敗しました")
             return
@@ -220,6 +220,23 @@ enum SaveError: LocalizedError {
         switch self {
         case .decodeFailed: return "画像を読み込めませんでした"
         case .httpError(let code): return "ダウンロード失敗 (HTTP \(code))"
+        }
+    }
+}
+
+private extension UIImage {
+    /// Redraws into a fresh bitmap so PNG encoding can't get the orientation
+    /// wrong. `WKWebView.takeSnapshot(with:)` (used for the Flutter-page
+    /// long-press fallback, see WebViewController.captureCrop) can hand back
+    /// an image whose `imageOrientation` isn't `.up` even for a plain 2D
+    /// crop, and `pngData()` doesn't reliably bake that metadata in --
+    /// confirmed on-device as a crop saved upside down. Redrawing through
+    /// UIGraphicsImageRenderer always produces a canonical `.up` bitmap
+    /// regardless of what the source's orientation flag claims.
+    func normalizedOrientation() -> UIImage {
+        guard imageOrientation != .up else { return self }
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
         }
     }
 }
