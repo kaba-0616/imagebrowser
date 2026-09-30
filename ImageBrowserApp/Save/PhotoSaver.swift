@@ -100,6 +100,51 @@ final class PhotoSaver: ObservableObject {
         state = .finished(succeeded: succeeded, failed: failed, message: failed > 0 ? lastError : nil)
     }
 
+    /// Saves a raw UIImage directly -- used for the canvas-snapshot fallback
+    /// (see WebViewController.captureCrop) where there's no URL to fetch,
+    /// just pixels already in hand.
+    func saveRaw(_ image: UIImage) async {
+        log.removeAll()
+        state = .saving(done: 0, total: 1)
+        appendLog("保存開始: スナップショット切り出し 1件")
+
+        let status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        appendLog("権限状態(開始時): \(status.description)")
+        let authorized: Bool
+        if status == .notDetermined {
+            let requested = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            appendLog("権限リクエスト結果: \(requested.description)")
+            authorized = (requested == .authorized || requested == .limited)
+        } else {
+            authorized = (status == .authorized || status == .limited)
+        }
+
+        guard authorized else {
+            appendLog("写真へのアクセスが許可されていないため中止", isError: true)
+            state = .finished(
+                succeeded: 0,
+                failed: 1,
+                message: "写真へのアクセスが許可されていません。\n「設定」→「プライバシーとセキュリティ」→「写真」→「ImageBrowser」で許可してください。"
+            )
+            return
+        }
+
+        guard let data = image.pngData() else {
+            appendLog("エンコード失敗", isError: true)
+            state = .finished(succeeded: 0, failed: 1, message: "画像の保存に失敗しました")
+            return
+        }
+
+        do {
+            try await addToLibrary(data: data, fileExtension: "png")
+            appendLog("完了: 成功1 失敗0")
+            state = .finished(succeeded: 1, failed: 0, message: nil)
+        } catch {
+            appendLog("失敗: \(error.localizedDescription)", isError: true)
+            state = .finished(succeeded: 0, failed: 1, message: error.localizedDescription)
+        }
+    }
+
     func reset() {
         state = .idle
     }

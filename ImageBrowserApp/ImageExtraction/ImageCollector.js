@@ -19,7 +19,13 @@
     // サムネイルの真上に重なる保護用オーバーレイ画像。実在するsrcを持つ
     // ため素通りせず、長押しでこれを検出してしまうと本物の写真まで
     // 辿り着けない(elementsFromPointのスタックで先に見つかるため)。
-    var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\/|\/img_protect\.png/i;
+    // splash/img/ はFlutter Web標準テンプレートの起動スプラッシュ画像
+    // (light-3x.png等)の定位置。さくら坂46メッセージ(Flutter製アプリ)で、
+    // ページ内で唯一実在するimg要素がこれだったため、長押しのたびに
+    // これだけが検出されてしまっていた。除外することで、Canvas描画への
+    // フォールバック(下のisFlutterPage/isCanvasRenderedPage参照)に
+    // ちゃんと繋がるようにする。
+    var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\/|\/img_protect\.png|\/splash\/img\//i;
 
     // .../<hash>/1200_1200_102400.jpg のようなリサイズ配信URLから
     // 元画像URLを復元する。
@@ -103,6 +109,30 @@
             if (v) { return v; }
         }
         return null;
+    }
+
+    // Flutter Webは画面をCanvasに直接描画するため、写真やアイコンは
+    // 通常の<img>/CSS背景画像としてDOMに一切現れない(さくら坂46メッセージで
+    // 確認)。<flutter-view>/<flt-glass-pane>はFlutterのWeb出力が必ず生成する
+    // ルート要素なので、これの有無でCanvas描画アプリかどうかを判定する。
+    function isFlutterPage() {
+        return !!document.querySelector("flutter-view, flt-glass-pane");
+    }
+
+    // DOMを一切見ずに、ブラウザが実際に読み込んだ画像のURL一覧を
+    // Resource Timing APIから拾う。Canvas描画アプリでは、写真データ自体は
+    // 普通にHTTPで取得されて画面に描かれているので、DOM収集の穴を
+    // この方法で埋められる(幅/高さの情報は無いため0のまま)。
+    function resourceTimingImages() {
+        var out = [];
+        try {
+            var entries = performance.getEntriesByType("resource");
+            for (var i = 0; i < entries.length; i++) {
+                var url = entries[i].name;
+                if (/\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(url)) { out.push(url); }
+            }
+        } catch (e) {}
+        return out;
     }
 
     function collect(withBackgrounds) {
@@ -235,6 +265,15 @@
 
         try { scanRoot(document); } catch (e) {}
 
+        // 通常サイトでは常時オンにするとトラッカーの計測用画像等のノイズが
+        // 増えるだけなので、DOM収集が原理的に無力なFlutterページに限る。
+        if (isFlutterPage()) {
+            var netImgs = resourceTimingImages();
+            for (var ni = 0; ni < netImgs.length; ni++) {
+                addURL(netImgs[ni], 0, 0, "network");
+            }
+        }
+
         var frames = document.querySelectorAll("iframe, frame");
         for (var f = 0; f < frames.length; f++) {
             try {
@@ -357,6 +396,7 @@
     window.__ImageBrowserCollector = {
         collect: collect,
         findImageAt: findImageAt,
-        findImageAtDebug: findImageAtDebug
+        findImageAtDebug: findImageAtDebug,
+        isFlutterPage: isFlutterPage
     };
 })();

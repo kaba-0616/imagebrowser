@@ -50,6 +50,9 @@ function run(pageURL, els, opts = {}) {
         querySelectorAll(sel) {
             return els.filter(e => sel.split(",").some(s => matches(e, s)));
         },
+        querySelector(sel) {
+            return els.find(e => sel.split(",").some(s => matches(e, s))) || null;
+        },
         elementFromPoint(x, y) {
             return opts.elementAt ? opts.elementAt(x, y) : null;
         },

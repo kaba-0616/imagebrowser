@@ -69,17 +69,22 @@ private struct BrowserTabContentView: View {
             progressBar
             WebViewRepresentable(webView: controller.webView)
                 .overlay(alignment: .topLeading) {
-                    if let url = controller.longPressedImageURL, let point = controller.longPressLocation {
+                    if let point = controller.longPressLocation,
+                       controller.longPressedImageURL != nil || controller.longPressedSnapshotImage != nil {
                         GeometryReader { proxy in
                             SafariStyleImageMenu(
+                                // No "copy link" for the snapshot fallback --
+                                // there's no URL to copy, just pixels already
+                                // captured (see WebViewController.captureCrop).
                                 onSave: {
-                                    saveSingle(url)
+                                    if let url = controller.longPressedImageURL {
+                                        saveSingle(url)
+                                    } else if let snapshot = controller.longPressedSnapshotImage {
+                                        Task { await longPressSaver.saveRaw(snapshot) }
+                                    }
                                     controller.dismissLongPressMenu()
                                 },
-                                onCopyLink: {
-                                    UIPasteboard.general.string = url.absoluteString
-                                    controller.dismissLongPressMenu()
-                                }
+                                onCopyLink: copyLinkAction
                             )
                             .position(clampedMenuPosition(around: point, in: proxy.size))
                         }
@@ -268,6 +273,14 @@ private struct BrowserTabContentView: View {
         }
     }
 
+    private var copyLinkAction: (() -> Void)? {
+        guard let url = controller.longPressedImageURL else { return nil }
+        return {
+            UIPasteboard.general.string = url.absoluteString
+            controller.dismissLongPressMenu()
+        }
+    }
+
     private func saveSingle(_ url: URL) {
         let image = PageImage(id: 0, url: url, width: 0, height: 0, renderedURL: nil, origin: "dom")
         Task { await longPressSaver.save([image]) }
@@ -302,13 +315,17 @@ private struct SafariStyleImageMenu: View {
     static let estimatedHeight: CGFloat = 96
 
     let onSave: () -> Void
-    let onCopyLink: () -> Void
+    // nil for the canvas-snapshot fallback (WebViewController.captureCrop) --
+    // there's no URL behind those pixels to copy.
+    let onCopyLink: (() -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
             row(icon: "square.and.arrow.down", title: "\"写真\"に保存", action: onSave)
-            Divider()
-            row(icon: "doc.on.doc", title: "リンクをコピー", action: onCopyLink)
+            if let onCopyLink {
+                Divider()
+                row(icon: "doc.on.doc", title: "リンクをコピー", action: onCopyLink)
+            }
         }
         .frame(width: Self.width)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

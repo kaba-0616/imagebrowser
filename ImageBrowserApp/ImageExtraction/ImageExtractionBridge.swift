@@ -40,4 +40,15 @@ enum ImageExtractionBridge {
     private struct FindImageDebugResult: Decodable {
         let url: String?
     }
+
+    /// Flutter Web pages (and similar canvas-rendered apps) never put photos
+    /// in the DOM at all -- `findImage` above will always come back nil on
+    /// them, not because of some save-blocking trick but because there is no
+    /// URL to find. WebViewController falls back to a screen-capture crop
+    /// when this is true (see `captureCrop`).
+    static func isCanvasRenderedPage(in webView: WKWebView) async -> Bool {
+        let script = "!!(window.__ImageBrowserCollector && window.__ImageBrowserCollector.isFlutterPage())"
+        let result = try? await webView.evaluateJavaScript(script)
+        return (result as? Bool) ?? false
+    }
 }

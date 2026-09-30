@@ -30,6 +30,11 @@ final class WebViewController: NSObject, ObservableObject {
     /// `webView` itself -- lets the save menu anchor near the touch point
     /// the way Safari's own does, instead of a generic bottom sheet.
     @Published private(set) var longPressLocation: CGPoint?
+    /// Set instead of `longPressedImageURL` when no image URL could be found
+    /// at all but the page is canvas-rendered (see `handleLongPress`) -- a
+    /// cropped screen capture around the touch point, saved as-is since
+    /// there's no original file to fetch.
+    @Published private(set) var longPressedSnapshotImage: UIImage?
     /// Set by TabManager right after creating this controller. `window.open()`/
     /// `target="_blank"` (see `createWebViewWith` below) calls this instead of
     /// loading in place, so the new page becomes an ordinary tab -- matching
@@ -209,15 +214,60 @@ final class WebViewController: NSObject, ObservableObject {
                 AppLog.log("長押しで画像を検出: \(url.absoluteString)")
                 self?.longPressLocation = point
                 self?.longPressedImageURL = url
-            } else {
-                AppLog.log("長押し位置に画像なし (\(Int(point.x)), \(Int(point.y)))")
+                return
             }
+            // No DOM/CSS image URL at that point. On an ordinary site that
+            // just means "nothing there" -- but on a canvas-rendered app
+            // (Flutter Web etc.) it's *never* going to find one, since
+            // there's no <img>/background-image to find in the first place;
+            // everything is painted pixels. There, fall back to cropping a
+            // snapshot of what's actually on screen at that point, which at
+            // least saves what the user was looking at even without an
+            // original file/URL.
+            guard await ImageExtractionBridge.isCanvasRenderedPage(in: webView) else {
+                AppLog.log("長押し位置に画像なし (\(Int(point.x)), \(Int(point.y)))")
+                return
+            }
+            AppLog.log("長押し位置に画像なし、Canvas描画ページのためスナップショット切り出しにフォールバック (\(Int(point.x)), \(Int(point.y)))")
+            guard let self, let cropped = await self.captureCrop(around: point) else {
+                AppLog.log("スナップショット切り出しに失敗", isError: true)
+                return
+            }
+            self.longPressLocation = point
+            self.longPressedSnapshotImage = cropped
         }
     }
 
     func dismissLongPressMenu() {
         longPressedImageURL = nil
+        longPressedSnapshotImage = nil
         longPressLocation = nil
+    }
+
+    /// A square region of the live view around `point`, used as a last-resort
+    /// save target when no image URL could be found at all (see
+    /// `handleLongPress`). `takeSnapshot` captures WebKit's own composited
+    /// output -- the same thing the user's eyes see -- rather than reading
+    /// pixels back through the page's own canvas/WebGL context, which would
+    /// often throw a cross-origin "tainted canvas" error for photos loaded
+    /// from a different domain than the page itself.
+    private func captureCrop(around point: CGPoint, side: CGFloat = 320) async -> UIImage? {
+        let config = WKSnapshotConfiguration()
+        let half = side / 2
+        config.rect = CGRect(
+            x: max(0, point.x - half),
+            y: max(0, point.y - half),
+            width: side,
+            height: side
+        )
+        return await withCheckedContinuation { continuation in
+            webView.takeSnapshot(with: config) { image, error in
+                if let error {
+                    AppLog.log("スナップショット切り出し失敗: \(error.localizedDescription)", isError: true)
+                }
+                continuation.resume(returning: image)
+            }
+        }
     }
 
     // MARK: - Ad block
