@@ -159,6 +159,13 @@
                 if (THUMBNAIL_PATH.test(url)) { continue; }
                 out.push(url);
             }
+            // Flutter等のSPAはページ遷移してもURLが変わるだけで、ブラウザ的な
+            // ドキュメント遷移は起きない。そのためResource Timing APIの履歴は
+            // ページを開いてからずっと蓄積され続け、消さないと「だいぶ前に
+            // 見た別の画面の画像」までいつまでも一括抽出に混ざってしまう。
+            // 読み終えた分はここで消化しておき、次回の抽出では「前回以降に
+            // 新しく読み込まれたもの」だけが対象になるようにする。
+            performance.clearResourceTimings();
         } catch (e) {}
         return out;
     }
