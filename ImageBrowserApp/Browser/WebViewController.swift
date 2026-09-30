@@ -229,7 +229,10 @@ final class WebViewController: NSObject, ObservableObject {
                 return
             }
             AppLog.log("長押し位置に画像なし、Canvas描画ページのためスナップショット切り出しにフォールバック (\(Int(point.x)), \(Int(point.y)))")
-            guard let self, let cropped = await self.captureCrop(around: point) else {
+            guard let self else { return }
+            let region = await ImageExtractionBridge.canvasRegion(in: webView, at: point)
+            AppLog.log("切り出し範囲: \(region.map { "\($0)" } ?? "取得できず、固定サイズにフォールバック")")
+            guard let cropped = await self.captureCrop(around: point, region: region) else {
                 AppLog.log("スナップショット切り出しに失敗", isError: true)
                 return
             }
@@ -244,22 +247,30 @@ final class WebViewController: NSObject, ObservableObject {
         longPressLocation = nil
     }
 
-    /// A square region of the live view around `point`, used as a last-resort
-    /// save target when no image URL could be found at all (see
-    /// `handleLongPress`). `takeSnapshot` captures WebKit's own composited
-    /// output -- the same thing the user's eyes see -- rather than reading
-    /// pixels back through the page's own canvas/WebGL context, which would
-    /// often throw a cross-origin "tainted canvas" error for photos loaded
-    /// from a different domain than the page itself.
-    private func captureCrop(around point: CGPoint, side: CGFloat = 320) async -> UIImage? {
+    /// A last-resort save target when no image URL could be found at all
+    /// (see `handleLongPress`). `takeSnapshot` captures WebKit's own
+    /// composited output -- the same thing the user's eyes see -- rather
+    /// than reading pixels back through the page's own canvas/WebGL context,
+    /// which would often throw a cross-origin "tainted canvas" error for
+    /// photos loaded from a different domain than the page itself.
+    ///
+    /// `region`, when available, is the actual on-screen rect of the widget
+    /// under the touch (from Flutter's accessibility DOM overlay -- see
+    /// `ImageExtractionBridge.canvasRegion`), so a small avatar gets a tight
+    /// crop and a large photo gets its whole frame, rather than always the
+    /// same fixed square regardless of what was actually pressed. A small
+    /// margin is added since that rect is exact and touch points land a few
+    /// pixels inside an edge often enough that a literal 1:1 crop feels
+    /// clipped.
+    private func captureCrop(around point: CGPoint, region: CGRect?, fallbackSide: CGFloat = 320) async -> UIImage? {
         let config = WKSnapshotConfiguration()
-        let half = side / 2
-        config.rect = CGRect(
-            x: max(0, point.x - half),
-            y: max(0, point.y - half),
-            width: side,
-            height: side
-        )
+        if let region {
+            let margin: CGFloat = 12
+            config.rect = region.insetBy(dx: -margin, dy: -margin)
+        } else {
+            let half = fallbackSide / 2
+            config.rect = CGRect(x: point.x - half, y: point.y - half, width: fallbackSide, height: fallbackSide)
+        }
         return await withCheckedContinuation { continuation in
             webView.takeSnapshot(with: config) { image, error in
                 if let error {

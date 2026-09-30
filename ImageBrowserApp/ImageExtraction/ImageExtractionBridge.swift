@@ -51,4 +51,24 @@ enum ImageExtractionBridge {
         let result = try? await webView.evaluateJavaScript(script)
         return (result as? Bool) ?? false
     }
+
+    /// The on-screen rect of the widget at `point`, from Flutter's
+    /// accessibility DOM overlay (see `findCanvasRegionAt` in
+    /// ImageCollector.js) -- lets the snapshot-crop fallback frame tightly
+    /// on the actual photo/avatar instead of an arbitrary fixed square.
+    static func canvasRegion(in webView: WKWebView, at point: CGPoint) async -> CGRect? {
+        let script = "JSON.stringify(window.__ImageBrowserCollector.findCanvasRegionAt(\(point.x), \(point.y)))"
+        guard let result = try? await webView.evaluateJavaScript(script),
+              let jsonString = result as? String,
+              let data = jsonString.data(using: .utf8),
+              let rect = try? JSONDecoder().decode(CanvasRegion.self, from: data) else { return nil }
+        return CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+    }
+
+    private struct CanvasRegion: Decodable {
+        let x: Double
+        let y: Double
+        let width: Double
+        let height: Double
+    }
 }

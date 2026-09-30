@@ -111,6 +111,26 @@
         return null;
     }
 
+    // Canvas描画アプリでの長押しスナップショット切り出し(findImageAtが
+    // 何も見つけられなかった場合のフォールバック)用に、押された場所の
+    // 「本来の表示範囲」を返す。Flutter Webはアクセシビリティ用に、実際の
+    // 見た目とぴったり同じ位置・サイズの透明なDOM要素(flt-semantics-*)を
+    // 重ねて配置しているので、これのgetBoundingClientRect()が使える。
+    // 見つからなければnull(呼び出し側で無難な固定サイズにフォールバックする)。
+    function findCanvasRegionAt(x, y) {
+        var stack;
+        try { stack = document.elementsFromPoint(x, y); } catch (e) { stack = []; }
+        for (var i = 0; i < stack.length; i++) {
+            var tag = (stack[i].tagName || "").toLowerCase();
+            if (tag.indexOf("flt-semantics") !== 0) { continue; }
+            var r = stack[i].getBoundingClientRect();
+            if (r.width > 4 && r.height > 4) {
+                return { x: r.left, y: r.top, width: r.width, height: r.height };
+            }
+        }
+        return null;
+    }
+
     // Flutter Webは画面をCanvasに直接描画するため、写真やアイコンは
     // 通常の<img>/CSS背景画像としてDOMに一切現れない(さくら坂46メッセージで
     // 確認)。<flutter-view>/<flt-glass-pane>はFlutterのWeb出力が必ず生成する
@@ -397,6 +417,7 @@
         collect: collect,
         findImageAt: findImageAt,
         findImageAtDebug: findImageAtDebug,
-        isFlutterPage: isFlutterPage
+        isFlutterPage: isFlutterPage,
+        findCanvasRegionAt: findCanvasRegionAt
     };
 })();
