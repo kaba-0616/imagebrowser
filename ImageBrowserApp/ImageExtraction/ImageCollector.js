@@ -252,9 +252,30 @@
         return images;
     }
 
+    // 一部サイトは「touchstart(=指が触れた瞬間)」にJSでimgのsrcを本物→
+    // 別画像(ロゴ・プレースホルダー等)へすり替え、長押しで検出される頃には
+    // 偽物しか残っていない、という保存妨害をしてくる(さくら坂46メッセージの
+    // splash/img/light-3x.pngで確認)。キャプチャフェーズのリスナーは同じ
+    // イベントに対するバブルフェーズのリスナー(サイト側の多くはこちらで
+    // 実装されている)より必ず先に走るので、すり替えが起きる前の本来のsrcを
+    // ここで先取りして憶えておき、findImageAtではそちらを優先する。
+    var lastRealSrc = new WeakMap();
+    function rememberRealSrc(target) {
+        var node = target;
+        for (var steps = 0; steps < 8 && node; steps++) {
+            if (node.tagName === "IMG") {
+                var src = node.currentSrc || node.src;
+                if (src) { lastRealSrc.set(node, src); }
+            }
+            node = node.parentElement;
+        }
+    }
+    document.addEventListener("touchstart", function (e) { rememberRealSrc(e.target); }, { capture: true, passive: true });
+    document.addEventListener("mousedown", function (e) { rememberRealSrc(e.target); }, { capture: true, passive: true });
+
     function imageURLFromElement(node) {
         if (node.tagName === "IMG") {
-            var url = node.currentSrc || node.src
+            var url = lastRealSrc.get(node) || node.currentSrc || node.src
                 || bestFromSrcset(node.getAttribute("srcset"))
                 || fromLazyAttrs(node);
             if (url && !UI_ASSET_PATH.test(url)) { return resolve(url); }

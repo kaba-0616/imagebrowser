@@ -57,7 +57,11 @@ function run(pageURL, els, opts = {}) {
             if (opts.elementsAt) { return opts.elementsAt(x, y); }
             const single = opts.elementAt ? opts.elementAt(x, y) : null;
             return single ? [single] : [];
-        }
+        },
+        // ImageCollector.js が touchstart/mousedown をキャプチャフェーズで
+        // 監視する(サイト側のsrcすり替え対策)ための最小限のスタブ。
+        // dry run では実際のタッチイベントは発生しないので何もしない。
+        addEventListener() {}
     };
     const ctx = {
         document, URL, console,
