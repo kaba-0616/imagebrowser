@@ -169,8 +169,24 @@ final class WebViewController: NSObject, ObservableObject {
     /// backgrounded, which wipes any state kept on the JS side (confirmed on
     /// a real device: results shrank right after a background/foreground
     /// cycle because the page's own bookkeeping had been reset to empty).
+    ///
+    /// No time-based expiry: the timeline loads all its thumbnails once at
+    /// page open and scrolling fetches nothing new (confirmed on device --
+    /// zero resource-timing entries after scrolling), so an age limit would
+    /// just make every photo silently expire a few minutes in. Instead the
+    /// history is reset whenever the page URL changes (see `observeWebView`),
+    /// which is what actually marks "a different screen" for these sites.
     private var seenNetworkImages: [URL: Date] = [:]
-    private let networkImageMaxAge: TimeInterval = 3 * 60
+
+    private func resetNetworkImageHistory() {
+        guard !seenNetworkImages.isEmpty else { return }
+        AppLog.log("ページURL変更のため通信履歴の蓄積をリセット (\(seenNetworkImages.count)件)")
+        seenNetworkImages.removeAll()
+        // Entries from the previous screen still sitting in the page's own
+        // buffer would otherwise be picked straight back up on the next
+        // extraction.
+        webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
+    }
 
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
         // Both read the buffer *before* collect()'s resourceTimingImages()
@@ -188,14 +204,15 @@ final class WebViewController: NSObject, ObservableObject {
         for image in fresh where image.origin != "network" {
             nonNetwork.append(image)
         }
-        seenNetworkImages = seenNetworkImages.filter { now.timeIntervalSince($0.value) <= networkImageMaxAge }
+
+        let candidates = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
 
         let breakdownText = breakdown.sorted { $0.value > $1.value }
             .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
-        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件 / 拡張子内訳: \(breakdownText)")
-        AppLog.log("蓄積中の画像URL一覧: \(seenNetworkImages.keys.map { $0.lastPathComponent }.joined(separator: ", "))")
+        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / 拡張子内訳: \(breakdownText)")
+        AppLog.log("抽出対象の画像URL一覧: \(candidates.map { "\($0.deletingLastPathComponent().lastPathComponent)/\($0.lastPathComponent)" }.joined(separator: ", "))")
 
-        let networkImages = seenNetworkImages.keys.map { url in
+        let networkImages = candidates.map { url in
             // A stable id per URL (not a running counter) so the same photo
             // keeps the same id across repeated extractions -- that's what
             // PhotoSaver.savedImageIDs/the grid's selection state key on, and
@@ -213,12 +230,51 @@ final class WebViewController: NSObject, ObservableObject {
         return nonNetwork + networkImages
     }
 
+    /// Signed CDN URLs (CloudFront's Expires/Signature query) come back with
+    /// a different query string each time the page re-requests the same
+    /// file, so the URL alone would count one photo several times. Keeps
+    /// only the most recently seen URL per path.
+    private static func latestPerPath(_ seen: [URL: Date]) -> [URL] {
+        var newest: [String: (url: URL, at: Date)] = [:]
+        for (url, at) in seen {
+            if let kept = newest[url.path], kept.at >= at { continue }
+            newest[url.path] = (url, at)
+        }
+        return newest.values.map(\.url)
+    }
+
+    /// The timeline list only ever loads `/thumbnails/` versions; the
+    /// `/files/` full-size version is fetched only once a photo is opened.
+    /// So a thumbnail is dropped only when its full-size sibling has also
+    /// been seen. The two filenames differ in their trailing timestamp
+    /// (e.g. `371193-20260926-090559.jpg` vs `...-090600.jpg`), so they're
+    /// matched on the leading message number instead of the whole name.
+    private static func dropThumbnailsWithFullSize(_ urls: [URL]) -> [URL] {
+        func key(_ url: URL) -> String {
+            let dir = url.deletingLastPathComponent().path
+                .replacingOccurrences(of: "/thumbnails", with: "/files")
+            let messageID = url.lastPathComponent.split(separator: "-").first.map(String.init)
+                ?? url.lastPathComponent
+            return "\(url.host ?? "")\(dir)/\(messageID)"
+        }
+        let fullSizeKeys = Set(urls.filter { $0.path.contains("/files/") }.map(key))
+        return urls.filter { url in
+            guard url.path.contains("/thumbnails/") else { return true }
+            return !fullSizeKeys.contains(key(url))
+        }
+    }
+
     // MARK: - Setup
 
     private func observeWebView() {
         kvoObservations = [
             webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
-                Task { @MainActor in self?.urlString = webView.url?.absoluteString ?? "" }
+                Task { @MainActor in
+                    guard let self else { return }
+                    let newURL = webView.url?.absoluteString ?? ""
+                    if newURL != self.urlString { self.resetNetworkImageHistory() }
+                    self.urlString = newURL
+                }
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] webView, _ in
                 Task { @MainActor in self?.canGoBack = webView.canGoBack }
