@@ -227,21 +227,41 @@ final class WebViewController: NSObject, ObservableObject {
             nonNetwork.append(image)
         }
 
-        var upgradedCount = 0
-        let candidates = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
-            .map { url -> URL in
-                guard url.path.contains("/thumbnails/"),
-                      let fullSize = apiFullSizeByKey[Self.fullSizeKey(url)] else { return url }
-                upgradedCount += 1
-                return fullSize
+        // Full-size URLs the site's own app has cached in IndexedDB (see
+        // NetworkTap.js' __ImageBrowserCachedFileURLs): past messages are
+        // drawn from that cache, and the timeline API only returns new ones,
+        // so this is the only place their full-size URLs exist. Signed URLs
+        // past their `Expires` would just 403, so those aren't used.
+        let cachedFiles = await cachedFullSizeURLs()
+        let validCached = cachedFiles.filter { !Self.isExpired($0, at: now) }
+        var cachedByKey: [String: URL] = [:]
+        for url in validCached { cachedByKey[Self.fullSizeKey(url)] = url }
+
+        var upgradedFromAPI = 0
+        var upgradedFromCache = 0
+        let candidates: [(url: URL, rendered: URL?)] = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
+            .map { url in
+                guard url.path.contains("/thumbnails/") else { return (url, nil) }
+                let key = Self.fullSizeKey(url)
+                if let fullSize = apiFullSizeByKey[key], !Self.isExpired(fullSize, at: now) {
+                    upgradedFromAPI += 1
+                    return (fullSize, url)
+                }
+                if let fullSize = cachedByKey[key] {
+                    upgradedFromCache += 1
+                    return (fullSize, url)
+                }
+                return (url, nil)
             }
 
         let breakdownText = breakdown.sorted { $0.value > $1.value }
             .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
-        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件(うちAPI応答からフルサイズに置換\(upgradedCount)件) / 拡張子内訳: \(breakdownText)")
-        AppLog.log("抽出対象の画像URL一覧: \(candidates.map(Self.shortPath).joined(separator: ", "))")
+        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / フルサイズに置換: API応答から\(upgradedFromAPI)件・端末内キャッシュから\(upgradedFromCache)件 / 拡張子内訳: \(breakdownText)")
+        AppLog.log("端末内キャッシュのフルサイズURL: \(cachedFiles.count)件(期限内\(validCached.count)件・期限切れ\(cachedFiles.count - validCached.count)件)")
+        AppLog.log("抽出対象の画像URL一覧: \(candidates.map { Self.shortPath($0.url) }.joined(separator: ", "))")
 
-        let networkImages = candidates.map { url in
+        let networkImages = candidates.map { candidate -> PageImage in
+            let url = candidate.url
             // A stable id per URL (not a running counter) so the same photo
             // keeps the same id across repeated extractions -- that's what
             // PhotoSaver.savedImageIDs/the grid's selection state key on, and
@@ -253,10 +273,30 @@ final class WebViewController: NSObject, ObservableObject {
                 // `abs(hashValue)` would trap if hashValue happened to be
                 // Int.min; going through UInt sidesteps that.
                 id: 1_000_000 + Int(UInt(bitPattern: url.absoluteString.hashValue) % 1_000_000),
-                url: url, width: 0, height: 0, renderedURL: nil, origin: "network"
+                // The thumbnail actually shown on screen stays as
+                // renderedURL: ImageLoader uses it for the grid preview, and
+                // PhotoSaver falls back to it if the full-size fetch fails.
+                url: url, width: 0, height: 0, renderedURL: candidate.rendered, origin: "network"
             )
         }
         return nonNetwork + networkImages
+    }
+
+    private func cachedFullSizeURLs() async -> [URL] {
+        let script = "return window.__ImageBrowserCachedFileURLs ? await window.__ImageBrowserCachedFileURLs() : [];"
+        guard let result = try? await webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page),
+              let strings = result as? [String] else { return [] }
+        return strings.compactMap(URL.init(string:))
+    }
+
+    /// CloudFront signed URLs carry an `Expires` epoch-seconds parameter;
+    /// past it the CDN answers 403. URLs without one are treated as valid.
+    private static func isExpired(_ url: URL, at now: Date) -> Bool {
+        guard let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "Expires" })?.value,
+              let expires = TimeInterval(value) else { return false }
+        // A minute of margin so a URL doesn't expire between listing and saving.
+        return expires < now.timeIntervalSince1970 + 60
     }
 
     /// Signed CDN URLs (CloudFront's Expires/Signature query) come back with
