@@ -87,10 +87,25 @@ final class WebViewController: NSObject, ObservableObject {
                 forMainFrameOnly: false
             )
         )
+        // Diagnostic network tap (see NetworkTap.js): has to run before any
+        // page script, so it can wrap fetch/XMLHttpRequest before the page
+        // starts using them.
+        if let tap = WebViewController.loadBundledScript(named: "NetworkTap") {
+            userContentController.addUserScript(
+                WKUserScript(source: tap, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+            )
+        }
         configuration.userContentController = userContentController
 
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        // Registered only here, not in commonSetup(): popup tabs share this
+        // userContentController, and registering the same name twice
+        // raises an Objective-C exception. Goes through a weak proxy since
+        // WKUserContentController retains its handlers strongly, which
+        // would otherwise keep this controller (and its WKWebView) alive
+        // forever after the tab is closed.
+        userContentController.add(WeakScriptMessageHandler(target: self), name: "imageBrowserNet")
         commonSetup()
     }
 
@@ -435,8 +450,12 @@ final class WebViewController: NSObject, ObservableObject {
     }
 
     private static func loadCollectorScript() -> String? {
-        guard let url = Bundle.main.url(forResource: "ImageCollector", withExtension: "js") else {
-            assertionFailure("ImageCollector.js is missing from the app bundle")
+        loadBundledScript(named: "ImageCollector")
+    }
+
+    private static func loadBundledScript(named name: String) -> String? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "js") else {
+            assertionFailure("\(name).js is missing from the app bundle")
             return nil
         }
         return try? String(contentsOf: url, encoding: .utf8)
@@ -522,6 +541,57 @@ extension WebViewController: WKUIDelegate {
     /// whichever tab opened it.
     func webViewDidClose(_ webView: WKWebView) {
         onRequestClose?()
+    }
+}
+
+extension WebViewController: WKScriptMessageHandler {
+    /// Reports from NetworkTap.js: one per API-like response the page
+    /// received, with any image URLs found inside its body. Diagnostic only
+    /// for now -- logged so we can see whether a site's API already hands
+    /// out full-size image URLs that the page itself never fetches.
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "imageBrowserNet",
+              let body = message.body as? [String: Any] else { return }
+        let rawURL = body["url"] as? String ?? ""
+        let status = body["status"] as? Int ?? 0
+        let ctype = body["ctype"] as? String ?? ""
+        let bytes = body["bytes"] as? Int ?? 0
+        let total = body["total"] as? Int ?? 0
+        let images = (body["images"] as? [String] ?? []).compactMap(URL.init(string:))
+
+        // Query strings are dropped: signed URLs make them very long and
+        // they carry nothing useful for diagnosis.
+        let endpoint: String
+        if let url = URL(string: rawURL, relativeTo: webView.url) {
+            endpoint = "\(url.host ?? "")\(url.path)"
+        } else {
+            endpoint = rawURL
+        }
+
+        guard total > 0 else {
+            AppLog.log("通信応答: \(endpoint) HTTP\(status) \(ctype) \(bytes)bytes 画像URLなし")
+            return
+        }
+        let fullSize = images.filter { $0.path.contains("/files/") }.count
+        let thumbs = images.filter { $0.path.contains("/thumbnails/") }.count
+        let samples = images.prefix(3)
+            .map { "\($0.deletingLastPathComponent().lastPathComponent)/\($0.lastPathComponent)" }
+            .joined(separator: ", ")
+        AppLog.log("通信応答: \(endpoint) HTTP\(status) \(ctype) \(bytes)bytes 画像URL\(total)件(files:\(fullSize) thumbnails:\(thumbs)) 例: \(samples)")
+    }
+}
+
+/// Forwards to a weakly held handler -- see where it's registered in
+/// WebViewController.init for why.
+final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var target: WKScriptMessageHandler?
+
+    init(target: WKScriptMessageHandler) {
+        self.target = target
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(userContentController, didReceive: message)
     }
 }
 
