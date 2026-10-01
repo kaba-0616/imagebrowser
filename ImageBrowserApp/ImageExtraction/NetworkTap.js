@@ -308,9 +308,20 @@
                             statuses[res.status] = (statuses[res.status] || 0) + 1;
                             return res.status === 200 ? res.text() : "";
                         })
-                        .then(function (text) { results[id] = findImages(text); }, function () {
+                        .then(function (text) {
+                            // type/本体ファイルの拡張子も返す: 動画メッセージの
+                            // サムネイル(ポスター画像)を抽出対象から外すため。
+                            var type = "", ext = "";
+                            try {
+                                var json = JSON.parse(text);
+                                type = String(json.type || "");
+                                var m = /\.([a-z0-9]+)(?:\?|#|$)/i.exec(String(json.file || ""));
+                                ext = m ? m[1].toLowerCase() : "";
+                            } catch (e) {}
+                            results[id] = { images: findImages(text), type: type, ext: ext };
+                        }, function () {
                             statuses.error = (statuses.error || 0) + 1;
-                            results[id] = [];
+                            results[id] = { images: [], type: "", ext: "" };
                         })
                         .then(function () { active--; next(); });
                 })(ids[index++]);

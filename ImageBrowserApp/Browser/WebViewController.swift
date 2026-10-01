@@ -236,15 +236,22 @@ final class WebViewController: NSObject, ObservableObject {
         var cachedByKey: [String: URL] = [:]
         for url in validCached { cachedByKey[Self.fullSizeKey(url)] = url }
 
-        let baseCandidates = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
+        var baseCandidates = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
 
         // Freshly signed URLs per message, straight from the site's API.
         var freshFullByKey: [String: URL] = [:]
         var freshThumbByKey: [String: URL] = [:]
+        var videoMessageIDs: Set<String> = []
+        var refreshedIDs: Set<String> = []
         let messageIDs = Array(Set(baseCandidates.compactMap(Self.messageID)))
         if let origin = messageAPIOrigin, !messageIDs.isEmpty {
             let refreshed = await refreshMessageImages(ids: messageIDs, origin: origin)
-            for url in refreshed.values.flatMap({ $0 }) {
+            refreshedIDs = Set(refreshed.keys)
+            videoMessageIDs = Set(refreshed.filter { $0.value.isVideo }.keys)
+            let typeCounts = Dictionary(grouping: refreshed.values, by: { "\($0.type.isEmpty ? "不明" : $0.type)(\($0.fileExtension.isEmpty ? "-" : $0.fileExtension))" })
+                .map { "\($0.key):\($0.value.count)" }.sorted().joined(separator: ", ")
+            AppLog.log("メッセージの種類内訳: \(typeCounts)")
+            for url in refreshed.values.filter({ !$0.isVideo }).flatMap(\.images) {
                 if url.path.contains("/files/") {
                     freshFullByKey[Self.fullSizeKey(url)] = url
                 } else if url.path.contains("/thumbnails/") {
@@ -254,6 +261,20 @@ final class WebViewController: NSObject, ObservableObject {
             AppLog.log("メッセージAPIで最新URLを再取得: 依頼\(messageIDs.count)件・フルサイズ取得\(freshFullByKey.count)件・縮小版取得\(freshThumbByKey.count)件")
         } else if !messageIDs.isEmpty {
             AppLog.log("メッセージAPIの送信先が未確認のため最新URLの再取得をスキップ(\(messageIDs.count)件)")
+        }
+
+        // Video messages' images are just poster frames. The API's type is
+        // authoritative; the filename pattern only covers messages the API
+        // wasn't asked about.
+        let beforeVideoFilter = baseCandidates.count
+        baseCandidates.removeAll { url in
+            if let id = Self.messageID(of: url), refreshedIDs.contains(id) {
+                return videoMessageIDs.contains(id)
+            }
+            return Self.looksLikeVideoPoster(url)
+        }
+        if beforeVideoFilter != baseCandidates.count {
+            AppLog.log("動画のサムネイルを除外: \(beforeVideoFilter - baseCandidates.count)件")
         }
 
         var upgradedFromAPI = 0
@@ -325,7 +346,27 @@ final class WebViewController: NSObject, ObservableObject {
     /// `api.message.` serving `/v2/...` -- the only API shape the refresh
     /// below knows how to call.
     private var messageAPIOrigin: String?
-    private var pendingRefresh: [String: CheckedContinuation<[String: [URL]], Never>] = [:]
+    private var pendingRefresh: [String: CheckedContinuation<[String: RefreshedMessage], Never>] = [:]
+
+    struct RefreshedMessage {
+        let images: [URL]
+        /// The API's own message type (e.g. "picture", "video", "text").
+        let type: String
+        /// Extension of the message's main `file` (e.g. "jpg", "mp4").
+        let fileExtension: String
+
+        /// A video message's images are only its poster frame, not a photo.
+        var isVideo: Bool {
+            type.lowercased().contains("video") || type.lowercased().contains("movie")
+                || ["mp4", "mov", "m4v", "m3u8", "webm"].contains(fileExtension)
+        }
+    }
+
+    /// Fallback for video posters when the API couldn't be asked: the site
+    /// names a video's extracted poster frame `<name>.0000000.jpg`.
+    private static func looksLikeVideoPoster(_ url: URL) -> Bool {
+        url.lastPathComponent.range(of: #"\.\d{7}\.(jpe?g|png)$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     /// The site's app caches signed image URLs for days; past their
     /// `Expires` CloudFront answers 403 -- for this app, even though the page
@@ -333,7 +374,7 @@ final class WebViewController: NSObject, ObservableObject {
     /// thumbnail and full-size in the grid failed with 403). Asks the site's
     /// own `/v2/messages/<id>` endpoint, with the page's own auth headers,
     /// for freshly signed URLs. Returns message ID -> image URLs.
-    private func refreshMessageImages(ids: [String], origin: String) async -> [String: [URL]] {
+    private func refreshMessageImages(ids: [String], origin: String) async -> [String: RefreshedMessage] {
         let requestID = UUID().uuidString
         guard let idsData = try? JSONSerialization.data(withJSONObject: ids),
               let idsJSON = String(data: idsData, encoding: .utf8) else { return [:] }
@@ -731,8 +772,14 @@ extension WebViewController: WKScriptMessageHandler {
         case "refresh":
             guard let requestID = body["requestID"] as? String,
                   let continuation = pendingRefresh.removeValue(forKey: requestID) else { return }
-            let raw = body["results"] as? [String: [String]] ?? [:]
-            let results = raw.mapValues { $0.compactMap(URL.init(string:)) }
+            let raw = body["results"] as? [String: [String: Any]] ?? [:]
+            let results = raw.mapValues { item in
+                RefreshedMessage(
+                    images: (item["images"] as? [String] ?? []).compactMap(URL.init(string:)),
+                    type: item["type"] as? String ?? "",
+                    fileExtension: (item["ext"] as? String ?? "").lowercased()
+                )
+            }
             let statuses = (body["statuses"] as? [String: Int] ?? [:])
                 .sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
             // Header *names* only -- values are auth tokens.
