@@ -184,6 +184,11 @@
                 // サイト自身のファビコン・ホーム画面用アイコン(Flutter Web標準の
                 // /icons/Icon-192.png 等)は保存対象ではない。
                 if (/\/favicon\.[a-z]+(\?|#|$)|\/icons\/Icon-(maskable-)?\d+\.png/i.test(url)) { continue; }
+                // メッセージ系アプリ(さくら坂46メッセージ等)の、写真ではない画像:
+                // メンバー/グループのアイコン、自分のプロフィール画像、アプリ設定用画像。
+                // この関数はFlutter製ページでしか使われないので、一般のサイトの
+                // /members/ 等のパスには影響しない。
+                if (/\/(members|groups|users)\/(thumbnails|phone-images)\/|\/app_configs\//i.test(url)) { continue; }
                 out.push(url);
             }
             // Swift側(WebViewController)が結果を累積して憶えておくので、

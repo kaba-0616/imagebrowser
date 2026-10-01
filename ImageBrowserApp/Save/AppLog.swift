@@ -29,11 +29,32 @@ enum AppLog {
         UserDefaults.standard.set(lines, forKey: key)
     }
 
+    /// Detailed diagnostics (every network response, storage scans, hit-test
+    /// trails, ...) -- recorded only while 設定 > 詳細ログ is on. Without the
+    /// switch these drowned out everything else: one page load produced
+    /// ~50 lines, and with a 400-line cap the useful lines (saves, errors)
+    /// scrolled away within a couple of extractions.
+    static func debug(_ text: String) {
+        guard DiagnosticsStore.isVerbose else { return }
+        log(text)
+    }
+
     static func read() -> [String] {
         UserDefaults.standard.stringArray(forKey: key) ?? []
     }
 
     static func clear() {
         UserDefaults.standard.removeObject(forKey: key)
+    }
+}
+
+/// 設定 > 詳細ログ. Off by default -- it's for investigating a specific
+/// site's behavior, not for everyday use.
+enum DiagnosticsStore {
+    static let key = "verboseDiagnostics"
+
+    static var isVerbose: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
     }
 }

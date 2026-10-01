@@ -201,7 +201,7 @@ final class WebViewController: NSObject, ObservableObject {
     /// on the timeline picked them up (seen on device).
     private func resetNetworkImageHistory(to newURL: String) {
         let path = URL(string: newURL).map { $0.path + ($0.query.map { "?\($0)" } ?? "") } ?? newURL
-        AppLog.log("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件をリセット)")
+        AppLog.debug("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件をリセット)")
         seenNetworkImages.removeAll()
         webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
         requestStorageScan()
@@ -214,8 +214,11 @@ final class WebViewController: NSObject, ObservableObject {
         // arrive asynchronously, so this one uses what the page-load/URL-
         // change scan already collected.
         requestStorageScan()
-        let rawCountBefore = await ImageExtractionBridge.rawResourceTimingCount(in: webView)
-        let breakdown = await ImageExtractionBridge.resourceTimingBreakdown(in: webView)
+        // Only needed for the verbose breakdown line -- skip the two extra
+        // JS round trips otherwise.
+        let verbose = DiagnosticsStore.isVerbose
+        let rawCountBefore = verbose ? await ImageExtractionBridge.rawResourceTimingCount(in: webView) : 0
+        let breakdown = verbose ? await ImageExtractionBridge.resourceTimingBreakdown(in: webView) : [:]
         let fresh = try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
 
         var nonNetwork: [PageImage] = []
@@ -250,7 +253,7 @@ final class WebViewController: NSObject, ObservableObject {
             videoMessageIDs = Set(refreshed.filter { $0.value.isVideo }.keys)
             let typeCounts = Dictionary(grouping: refreshed.values, by: { "\($0.type.isEmpty ? "不明" : $0.type)(\($0.fileExtension.isEmpty ? "-" : $0.fileExtension))" })
                 .map { "\($0.key):\($0.value.count)" }.sorted().joined(separator: ", ")
-            AppLog.log("メッセージの種類内訳: \(typeCounts)")
+            AppLog.debug("メッセージの種類内訳: \(typeCounts)")
             for url in refreshed.values.filter({ !$0.isVideo }).flatMap(\.images) {
                 if url.path.contains("/files/") {
                     freshFullByKey[Self.fullSizeKey(url)] = url
@@ -260,7 +263,7 @@ final class WebViewController: NSObject, ObservableObject {
             }
             AppLog.log("メッセージAPIで最新URLを再取得: 依頼\(messageIDs.count)件・フルサイズ取得\(freshFullByKey.count)件・縮小版取得\(freshThumbByKey.count)件")
         } else if !messageIDs.isEmpty {
-            AppLog.log("メッセージAPIの送信先が未確認のため最新URLの再取得をスキップ(\(messageIDs.count)件)")
+            AppLog.debug("メッセージAPIの送信先が未確認のため最新URLの再取得をスキップ(\(messageIDs.count)件)")
         }
 
         // Video messages' images are just poster frames. The API's type is
@@ -305,9 +308,9 @@ final class WebViewController: NSObject, ObservableObject {
 
         let breakdownText = breakdown.sorted { $0.value > $1.value }
             .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
-        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / 最新URLに差し替え\(refreshedCount)件 / フルサイズに置換: API応答から\(upgradedFromAPI)件・端末内キャッシュから\(upgradedFromCache)件 / 拡張子内訳: \(breakdownText)")
-        AppLog.log("端末内キャッシュのフルサイズURL: \(cachedFiles.count)件(期限内\(validCached.count)件・期限切れ\(cachedFiles.count - validCached.count)件)")
-        AppLog.log("抽出対象の画像URL一覧: \(candidates.map { Self.shortPath($0.url) }.joined(separator: ", "))")
+        AppLog.debug("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / 最新URLに差し替え\(refreshedCount)件 / フルサイズに置換: API応答から\(upgradedFromAPI)件・端末内キャッシュから\(upgradedFromCache)件 / 拡張子内訳: \(breakdownText)")
+        AppLog.debug("端末内キャッシュのフルサイズURL: \(cachedFiles.count)件(期限内\(validCached.count)件・期限切れ\(cachedFiles.count - validCached.count)件)")
+        AppLog.debug("抽出対象の画像URL一覧: \(candidates.map { Self.shortPath($0.url) }.joined(separator: ", "))")
 
         let networkImages = candidates.map { candidate -> PageImage in
             let url = candidate.url
@@ -557,7 +560,7 @@ final class WebViewController: NSObject, ObservableObject {
             AppLog.log("長押し位置に画像なし、Canvas描画ページのためスナップショット切り出しにフォールバック (\(Int(point.x)), \(Int(point.y)))")
             guard let self else { return }
             let region = await ImageExtractionBridge.canvasRegion(in: webView, at: point)
-            AppLog.log("切り出し範囲: \(region.map { "\($0)" } ?? "取得できず、固定サイズにフォールバック")")
+            AppLog.debug("切り出し範囲: \(region.map { "\($0)" } ?? "取得できず、固定サイズにフォールバック")")
             guard let cropped = await self.captureCrop(around: point, region: region) else {
                 AppLog.log("スナップショット切り出しに失敗", isError: true)
                 return
@@ -629,11 +632,20 @@ final class WebViewController: NSObject, ObservableObject {
         }
     }
 
+    /// UserDefaults.didChangeNotification fires on *any* UserDefaults write --
+    /// including every AppLog line -- so without this check the rule list
+    /// was removed and re-added on every tab for every log line written.
+    /// Only acts when the setting actually changed.
+    private var appliedAdBlockState: Bool?
+
     private func applyAdBlockState() {
         guard let adBlockRuleList else { return }
+        let enabled = AdBlockStore.isEnabled
+        guard enabled != appliedAdBlockState else { return }
+        appliedAdBlockState = enabled
         let contentController = webView.configuration.userContentController
         contentController.remove(adBlockRuleList)
-        if AdBlockStore.isEnabled {
+        if enabled {
             contentController.add(adBlockRuleList)
         }
     }
@@ -784,34 +796,38 @@ extension WebViewController: WKScriptMessageHandler {
                 .sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
             // Header *names* only -- values are auth tokens.
             let headerNames = (body["headerNames"] as? [String] ?? []).joined(separator: ", ")
-            AppLog.log("メッセージAPI再取得の応答: HTTP内訳[\(statuses)] 付与した認証ヘッダー名[\(headerNames.isEmpty ? "なし" : headerNames)]")
+            let summary = "メッセージAPI再取得の応答: HTTP内訳[\(statuses)] 付与した認証ヘッダー名[\(headerNames.isEmpty ? "なし" : headerNames)]"
+            // Always recorded when anything other than 200 came back (expired
+            // login, changed API...), otherwise only in verbose mode.
+            let allOK = (body["statuses"] as? [String: Int] ?? [:]).keys.allSatisfy { $0 == "200" }
+            if allOK { AppLog.debug(summary) } else { AppLog.log(summary, isError: true) }
             continuation.resume(returning: results)
             return
         case "ws-open":
-            AppLog.log("WebSocket接続: \(rawURL)")
+            AppLog.debug("WebSocket接続: \(rawURL)")
         case "ws":
-            AppLog.log("WebSocket受信: \(Self.endpoint(rawURL, relativeTo: webView.url)) \(body["bytes"] as? Int ?? 0)bytes \(imageSummary)")
+            AppLog.debug("WebSocket受信: \(Self.endpoint(rawURL, relativeTo: webView.url)) \(body["bytes"] as? Int ?? 0)bytes \(imageSummary)")
         case "storage":
             if let error = body["error"] as? String {
-                AppLog.log("端末内保存 \(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
+                AppLog.debug("端末内保存 \(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
             } else {
                 let sample = (body["sample"] as? [String] ?? []).joined(separator: ", ")
-                AppLog.log("端末内保存 \(body["store"] as? String ?? ""): キー\(body["keys"] as? Int ?? 0)個 \(body["bytes"] as? Int ?? 0)文字、画像URLを含むキー\(body["entries"] as? Int ?? 0)個 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)) 例: \(sample)")
+                AppLog.debug("端末内保存 \(body["store"] as? String ?? ""): キー\(body["keys"] as? Int ?? 0)個 \(body["bytes"] as? Int ?? 0)文字、画像URLを含むキー\(body["entries"] as? Int ?? 0)個 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)) 例: \(sample)")
             }
         case "idb":
             if let error = body["error"] as? String {
-                AppLog.log("IndexedDB: 一覧取得失敗 \(error)")
+                AppLog.debug("IndexedDB: 一覧取得失敗 \(error)")
             } else {
-                AppLog.log("IndexedDB: \((body["names"] as? [String] ?? []).joined(separator: ", "))")
+                AppLog.debug("IndexedDB: \((body["names"] as? [String] ?? []).joined(separator: ", "))")
             }
         case "idb-store":
             if let error = body["error"] as? String {
-                AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
+                AppLog.debug("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
             } else {
                 let fileURLs = (body["fileURLs"] as? [String] ?? []).compactMap(URL.init(string:))
                 for url in fileURLs { idbFullSizeByKey[Self.fullSizeKey(url)] = url }
                 if idbFullSizeByKey.count > 10000 { idbFullSizeByKey.removeAll() }
-                AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): レコード\(body["records"] as? Int ?? 0)件 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)、対応表に\(fileURLs.count)件登録)")
+                AppLog.debug("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): レコード\(body["records"] as? Int ?? 0)件 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)、対応表に\(fileURLs.count)件登録)")
             }
         default:
             if let url = URL(string: rawURL, relativeTo: webView.url)?.absoluteURL,
@@ -823,7 +839,7 @@ extension WebViewController: WKScriptMessageHandler {
             let bytes = body["bytes"] as? Int ?? 0
             let shape = body["shape"] as? String ?? ""
             let shapeText = shape.isEmpty ? "" : " 構造:\(shape)"
-            AppLog.log("通信応答: \(Self.endpoint(rawURL, relativeTo: webView.url)) HTTP\(status) \(ctype) \(bytes)bytes \(imageSummary)\(shapeText)")
+            AppLog.debug("通信応答: \(Self.endpoint(rawURL, relativeTo: webView.url)) HTTP\(status) \(ctype) \(bytes)bytes \(imageSummary)\(shapeText)")
         }
     }
 

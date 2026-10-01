@@ -30,7 +30,7 @@ enum ImageExtractionBridge {
         let script = "JSON.stringify(window.__ImageBrowserCollector.findImageAtDebug(\(point.x), \(point.y)))"
         guard let result = try? await webView.evaluateJavaScript(script) else { return nil }
         guard let jsonString = result as? String else { return nil }
-        AppLog.log("長押し判定の詳細: \(jsonString)")
+        AppLog.debug("長押し判定の詳細: \(jsonString)")
         guard let data = jsonString.data(using: .utf8),
               let decoded = try? JSONDecoder().decode(FindImageDebugResult.self, from: data),
               let urlString = decoded.url else { return nil }
