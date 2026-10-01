@@ -157,8 +157,50 @@ final class WebViewController: NSObject, ObservableObject {
 
     // MARK: - Image extraction
 
+    /// Canvas-rendered pages' "network" fallback (see ImageCollector.js'
+    /// resourceTimingImages) only ever reports what the browser's resource
+    /// timing buffer currently holds, which a single extraction call can
+    /// easily undershoot: a not-yet-rescrolled-into-view photo hasn't been
+    /// fetched again since it's already cached, so it just isn't there this
+    /// time. Accumulating across calls, here rather than in the page's own
+    /// JS, is what makes repeated extraction behave like "everything found
+    /// so far" instead of "only what's visible right now" -- and survives
+    /// iOS silently recreating the WKWebView's content process while
+    /// backgrounded, which wipes any state kept on the JS side (confirmed on
+    /// a real device: results shrank right after a background/foreground
+    /// cycle because the page's own bookkeeping had been reset to empty).
+    private var seenNetworkImages: [URL: Date] = [:]
+    private let networkImageMaxAge: TimeInterval = 3 * 60
+
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
-        try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
+        let fresh = try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
+
+        var nonNetwork: [PageImage] = []
+        let now = Date()
+        for image in fresh where image.origin == "network" {
+            seenNetworkImages[image.url] = now
+        }
+        for image in fresh where image.origin != "network" {
+            nonNetwork.append(image)
+        }
+        seenNetworkImages = seenNetworkImages.filter { now.timeIntervalSince($0.value) <= networkImageMaxAge }
+
+        let networkImages = seenNetworkImages.keys.map { url in
+            // A stable id per URL (not a running counter) so the same photo
+            // keeps the same id across repeated extractions -- that's what
+            // PhotoSaver.savedImageIDs/the grid's selection state key on, and
+            // a counter-based id would reassign on every call depending on
+            // dictionary ordering, making "already saved" tracking useless
+            // for this fallback path. Offset well clear of the DOM-origin
+            // items' 0..<N ids above.
+            PageImage(
+                // `abs(hashValue)` would trap if hashValue happened to be
+                // Int.min; going through UInt sidesteps that.
+                id: 1_000_000 + Int(UInt(bitPattern: url.absoluteString.hashValue) % 1_000_000),
+                url: url, width: 0, height: 0, renderedURL: nil, origin: "network"
+            )
+        }
+        return nonNetwork + networkImages
     }
 
     // MARK: - Setup

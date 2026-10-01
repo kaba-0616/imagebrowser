@@ -149,42 +149,31 @@
     // 同じ通信履歴スキャンで別途拾えるので、縮小版側は除外して重複を防ぐ。
     var THUMBNAIL_PATH = /\/thumbnails\//i;
 
-    // Flutter等のSPAはページ遷移してもURLが変わるだけで、ブラウザ的な
-    // ドキュメント遷移は起きない。そのためResource Timing APIの履歴は
-    // ページを開いてからずっと蓄積され続け、放っておくと「だいぶ前に見た
-    // 別の画面の画像」まで一括抽出に混ざる。かといって読むたびに丸ごと
-    // 消してしまうと、既に表示済みでキャッシュされ再取得が起きない画像
-    // (=同じ画面をもう一度抽出しただけ)まで結果から消えてしまう
-    // (実機で確認済み、抽出を繰り返すと件数が先細りしていた)。
-    // 折衷として、見つけたURLを時刻つきで憶えておき、一定時間より古い
-    // ものだけを毎回間引く。これなら同じ画面の再抽出では既出のものが
-    // 残り続け、何分も前の別画面の画像は自然に消えていく。
-    var NETWORK_IMAGE_MAX_AGE_MS = 3 * 60 * 1000;
-    var networkImageSeenAt = {};
-
+    // 以前はここで「見つけたURLを時刻つきで憶えて何分か経ったら間引く」を
+    // JS側(ページ内)でやっていたが、バックグラウンド中にiOSがWKWebViewの
+    // 裏側のプロセスをメモリ節約のために作り直すと、ページ内のJS状態ごと
+    // 消えてしまい、逆に結果が先細りする不具合が実機で確認された。
+    // 蓄積・間引きはWebViewController(アプリ本体側、ページの生き死にに
+    // 影響されない)に移し、ここは「今読める通信履歴をそのまま返すだけ」の
+    // 単純な関数に戻す。
     function resourceTimingImages() {
-        var now = Date.now();
+        var out = [];
         try {
             var entries = performance.getEntriesByType("resource");
             for (var i = 0; i < entries.length; i++) {
                 var url = entries[i].name;
                 if (!/\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(url)) { continue; }
                 if (THUMBNAIL_PATH.test(url)) { continue; }
-                networkImageSeenAt[url] = now;
+                out.push(url);
             }
-            // 読み終えた分は消化しておく(バッファの肥大化防止。見つけた
-            // URL自体はnetworkImageSeenAtに残るので、結果からは消えない)。
+            // Swift側(WebViewController)が結果を累積して憶えておくので、
+            // ここで読み終えた分は消化してよい。消化しておかないと、
+            // WebKitのバッファ上限(到達すると新しいエントリの記録自体が
+            // 止まる)に、Flutterのフレームワーク本体の読み込みだけで
+            // 達してしまい、その後スクロールで新たに読み込まれる写真が
+            // 一切記録されなくなる。
             performance.clearResourceTimings();
         } catch (e) {}
-
-        var out = [];
-        for (var seenUrl in networkImageSeenAt) {
-            if (now - networkImageSeenAt[seenUrl] > NETWORK_IMAGE_MAX_AGE_MS) {
-                delete networkImageSeenAt[seenUrl];
-                continue;
-            }
-            out.push(seenUrl);
-        }
         return out;
     }
 
