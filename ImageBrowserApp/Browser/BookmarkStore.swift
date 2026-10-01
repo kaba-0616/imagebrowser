@@ -23,45 +23,49 @@ final class BookmarkStore: ObservableObject {
 
     init() {
         load()
-        seedTestingSitesIfNeeded()
+        removeSeededTestingSitesIfNeeded()
     }
 
-    // TODO: 一時的な実装。画像検出ロジックの実機検証が終わったら削除する。
-    // 検証対象サイト一覧をブックマークに仕込んでおき、毎回URLを手入力せずに
-    // 巡回できるようにするためのもの。アプリ生涯で一度だけ(手動でブックマーク
-    // 済みかどうかに関わらず)既存のブックマークに追加投入する。以降は
-    // testingSitesSeededフラグだけで判定するので、後で手動削除しても
-    // 再投入はされない。
-    private func seedTestingSitesIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: "testingSitesSeeded") else { return }
-        UserDefaults.standard.set(true, forKey: "testingSitesSeeded")
+    /// Up to 1.0.0 (build 22), every install was seeded once with these
+    /// sites -- a development aid for checking image detection on real
+    /// sites, which shipped to App Store users too. Seeding was removed in
+    /// 1.0.1; this takes the seeded entries back out once, on the first
+    /// launch after updating, so everyone starts from an empty list. Only
+    /// these exact URLs are removed -- bookmarks the user added stay (a
+    /// manually added bookmark of the very same URL can't be told apart and
+    /// goes too).
+    private func removeSeededTestingSitesIfNeeded() {
+        let flag = "testingSitesRemoved"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        UserDefaults.standard.set(true, forKey: flag)
+        guard UserDefaults.standard.bool(forKey: "testingSitesSeeded") else { return }
 
-        let sites: [(String, String)] = [
-            ("ImageBrowserデモ(審査・撮影用)", "https://kaba-0616.github.io/imagebrowser-demo/demo.html"),
-            ("Yahoo!ニュース", "https://news.yahoo.co.jp/"),
-            ("livedoor NEWS", "https://news.livedoor.com/"),
-            ("ORICON NEWS", "https://www.oricon.co.jp/news/"),
-            ("モデルプレス", "https://mdpr.jp/"),
-            ("音楽ナタリー", "https://natalie.mu/music"),
-            ("リアルサウンド", "https://realsound.jp/"),
-            ("ビルボードジャパン", "https://www.billboard-japan.com/"),
-            ("Instagram", "https://www.instagram.com/"),
-            ("X (Twitter)", "https://x.com/"),
-            ("Threads", "https://www.threads.net/"),
-            ("櫻坂46", "https://sakurazaka46.com/"),
-            ("日向坂46", "https://www.hinatazaka46.com/"),
-            ("乃木坂46", "https://www.nogizaka46.com/"),
-            ("スターダスト タレント一覧", "https://www.stardust.co.jp/talent/"),
-            ("ホリプロ", "https://www.horipro.co.jp/"),
-            ("AKB48", "https://www.akb48.co.jp/"),
-            ("=LOVE(イコラブ)", "https://sp.equal-love.jp/")
+        let seededURLs: Set<String> = [
+            "https://kaba-0616.github.io/imagebrowser-demo/demo.html",
+            "https://news.yahoo.co.jp/",
+            "https://news.livedoor.com/",
+            "https://www.oricon.co.jp/news/",
+            "https://mdpr.jp/",
+            "https://natalie.mu/music",
+            "https://realsound.jp/",
+            "https://www.billboard-japan.com/",
+            "https://www.instagram.com/",
+            "https://x.com/",
+            "https://www.threads.net/",
+            "https://sakurazaka46.com/",
+            "https://www.hinatazaka46.com/",
+            "https://www.nogizaka46.com/",
+            "https://www.stardust.co.jp/talent/",
+            "https://www.horipro.co.jp/",
+            "https://www.akb48.co.jp/",
+            "https://sp.equal-love.jp/"
         ]
-        let seeded = sites.compactMap { title, urlString -> Bookmark? in
-            guard let url = URL(string: urlString) else { return nil }
-            return Bookmark(title: title, url: url)
+        let before = bookmarks.count
+        bookmarks.removeAll { seededURLs.contains($0.url.absoluteString) }
+        if bookmarks.count != before {
+            save()
+            AppLog.log("初期登録のブックマークを削除: \(before - bookmarks.count)件")
         }
-        bookmarks.append(contentsOf: seeded)
-        save()
     }
 
     func isBookmarked(_ url: URL) -> Bool {
