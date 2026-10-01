@@ -209,6 +209,10 @@ final class WebViewController: NSObject, ObservableObject {
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
         // Both read the buffer *before* collect()'s resourceTimingImages()
         // clears it -- same timing constraint, so they have to happen first.
+        // Diagnostic: report what's cached in the page's local storage /
+        // IndexedDB (NetworkTap.js). Results arrive asynchronously as
+        // separate log lines.
+        _ = try? await webView.evaluateJavaScript("window.__ImageBrowserStorageReport && window.__ImageBrowserStorageReport(); true")
         let rawCountBefore = await ImageExtractionBridge.rawResourceTimingCount(in: webView)
         let breakdown = await ImageExtractionBridge.resourceTimingBreakdown(in: webView)
         let fresh = try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
@@ -595,31 +599,67 @@ extension WebViewController: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "imageBrowserNet",
               let body = message.body as? [String: Any] else { return }
+        let kind = body["kind"] as? String ?? "api"
         let rawURL = body["url"] as? String ?? ""
-        let status = body["status"] as? Int ?? 0
-        let ctype = body["ctype"] as? String ?? ""
-        let bytes = body["bytes"] as? Int ?? 0
         let total = body["total"] as? Int ?? 0
         let images = (body["images"] as? [String] ?? []).compactMap(URL.init(string:))
-
-        // Query strings are dropped: signed URLs make them very long and
-        // they carry nothing useful for diagnosis.
-        let endpoint: String
-        if let url = URL(string: rawURL, relativeTo: webView.url) {
-            endpoint = "\(url.host ?? "")\(url.path)"
-        } else {
-            endpoint = rawURL
-        }
-
-        guard total > 0 else {
-            AppLog.log("通信応答: \(endpoint) HTTP\(status) \(ctype) \(bytes)bytes 画像URLなし")
-            return
-        }
         rememberAPIFullSize(images)
         let fullSize = images.filter { $0.path.contains("/files/") }.count
         let thumbs = images.filter { $0.path.contains("/thumbnails/") }.count
         let samples = images.prefix(3).map(Self.shortPath).joined(separator: ", ")
-        AppLog.log("通信応答: \(endpoint) HTTP\(status) \(ctype) \(bytes)bytes 画像URL\(total)件(files:\(fullSize) thumbnails:\(thumbs)) 例: \(samples)")
+        let imageSummary = total > 0
+            ? "画像URL\(total)件(files:\(fullSize) thumbnails:\(thumbs)) 例: \(samples)"
+            : "画像URLなし"
+
+        switch kind {
+        case "ws-open":
+            AppLog.log("WebSocket接続: \(rawURL)")
+        case "ws":
+            AppLog.log("WebSocket受信: \(Self.endpoint(rawURL, relativeTo: webView.url)) \(body["bytes"] as? Int ?? 0)bytes \(imageSummary)")
+        case "storage":
+            if let error = body["error"] as? String {
+                AppLog.log("端末内保存 \(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
+            } else {
+                let sample = (body["sample"] as? [String] ?? []).joined(separator: ", ")
+                AppLog.log("端末内保存 \(body["store"] as? String ?? ""): キー\(body["keys"] as? Int ?? 0)個 \(body["bytes"] as? Int ?? 0)文字、画像URLを含むキー\(body["entries"] as? Int ?? 0)個 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)) 例: \(sample)")
+            }
+        case "idb":
+            if let error = body["error"] as? String {
+                AppLog.log("IndexedDB: 一覧取得失敗 \(error)")
+            } else {
+                AppLog.log("IndexedDB: \((body["names"] as? [String] ?? []).joined(separator: ", "))")
+            }
+        case "idb-store":
+            if let error = body["error"] as? String {
+                AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
+            } else {
+                AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): レコード\(body["records"] as? Int ?? 0)件 画像URL\(total)件(files:\(body["files"] as? Int ?? 0))")
+            }
+        default:
+            let status = body["status"] as? Int ?? 0
+            let ctype = body["ctype"] as? String ?? ""
+            let bytes = body["bytes"] as? Int ?? 0
+            let shape = body["shape"] as? String ?? ""
+            let shapeText = shape.isEmpty ? "" : " 構造:\(shape)"
+            AppLog.log("通信応答: \(Self.endpoint(rawURL, relativeTo: webView.url)) HTTP\(status) \(ctype) \(bytes)bytes \(imageSummary)\(shapeText)")
+        }
+    }
+
+    /// host + path + query, with each query value cut to 24 characters --
+    /// paging/filter parameters (e.g. `?before=123&count=20`) matter for
+    /// figuring out how a site loads older items, but a signed URL's
+    /// Signature/Policy values are hundreds of characters of noise.
+    private static func endpoint(_ raw: String, relativeTo base: URL?) -> String {
+        guard let url = URL(string: raw, relativeTo: base),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else { return raw }
+        var text = "\(components.host ?? "")\(components.path)"
+        if let items = components.queryItems, !items.isEmpty {
+            text += "?" + items.map { item in
+                let value = item.value ?? ""
+                return "\(item.name)=\(value.count > 24 ? String(value.prefix(24)) + "…" : value)"
+            }.joined(separator: "&")
+        }
+        return text
     }
 }
 
