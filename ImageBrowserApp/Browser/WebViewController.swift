@@ -121,7 +121,16 @@ final class WebViewController: NSObject, ObservableObject {
         commonSetup()
     }
 
+    /// Which controller owns which WKWebView. A popup-turned-tab shares its
+    /// opener's WKUserContentController -- and with it the single
+    /// "imageBrowserNet" handler, which points at the *opener's* controller.
+    /// Without this lookup, a popup tab's NetworkTap reports (API origin,
+    /// cached URLs, refresh results) all landed on the opener, so the popup
+    /// tab's own refresh always timed out.
+    private static let owners = NSMapTable<WKWebView, WebViewController>.weakToWeakObjects()
+
     private func commonSetup() {
+        Self.owners.setObject(self, forKey: webView)
         webView.allowsBackForwardNavigationGestures = true
         // The built-in long-press preview/menu would otherwise compete with
         // our own gesture recognizer below, and its behavior is subject to
@@ -766,8 +775,14 @@ extension WebViewController: WKScriptMessageHandler {
     /// for now -- logged so we can see whether a site's API already hands
     /// out full-size image URLs that the page itself never fetches.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "imageBrowserNet",
-              let body = message.body as? [String: Any] else { return }
+        guard message.name == "imageBrowserNet" else { return }
+        // Forward to the tab the message actually came from (see `owners`).
+        if let source = message.webView, source !== webView,
+           let owner = Self.owners.object(forKey: source) {
+            owner.userContentController(userContentController, didReceive: message)
+            return
+        }
+        guard let body = message.body as? [String: Any] else { return }
         let kind = body["kind"] as? String ?? "api"
         let rawURL = body["url"] as? String ?? ""
         let total = body["total"] as? Int ?? 0
