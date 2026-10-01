@@ -193,13 +193,16 @@ final class WebViewController: NSObject, ObservableObject {
     /// which is what actually marks "a different screen" for these sites.
     private var seenNetworkImages: [URL: Date] = [:]
 
-    private func resetNetworkImageHistory() {
-        guard !seenNetworkImages.isEmpty else { return }
-        AppLog.log("ページURL変更のため通信履歴の蓄積をリセット (\(seenNetworkImages.count)件)")
+    /// Clears the page's own resource-timing buffer unconditionally, even
+    /// when nothing has been accumulated yet: an earlier version skipped the
+    /// whole reset when `seenNetworkImages` was empty, so navigating
+    /// timeline -> member list -> timeline without extracting in between left
+    /// the member list's thumbnails in the buffer, and the next extraction
+    /// on the timeline picked them up (seen on device).
+    private func resetNetworkImageHistory(to newURL: String) {
+        let path = URL(string: newURL).map { $0.path + ($0.query.map { "?\($0)" } ?? "") } ?? newURL
+        AppLog.log("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件をリセット)")
         seenNetworkImages.removeAll()
-        // Entries from the previous screen still sitting in the page's own
-        // buffer would otherwise be picked straight back up on the next
-        // extraction.
         webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
     }
 
@@ -220,12 +223,19 @@ final class WebViewController: NSObject, ObservableObject {
             nonNetwork.append(image)
         }
 
+        var upgradedCount = 0
         let candidates = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
+            .map { url -> URL in
+                guard url.path.contains("/thumbnails/"),
+                      let fullSize = apiFullSizeByKey[Self.fullSizeKey(url)] else { return url }
+                upgradedCount += 1
+                return fullSize
+            }
 
         let breakdownText = breakdown.sorted { $0.value > $1.value }
             .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
-        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / 拡張子内訳: \(breakdownText)")
-        AppLog.log("抽出対象の画像URL一覧: \(candidates.map { "\($0.deletingLastPathComponent().lastPathComponent)/\($0.lastPathComponent)" }.joined(separator: ", "))")
+        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件(うちAPI応答からフルサイズに置換\(upgradedCount)件) / 拡張子内訳: \(breakdownText)")
+        AppLog.log("抽出対象の画像URL一覧: \(candidates.map(Self.shortPath).joined(separator: ", "))")
 
         let networkImages = candidates.map { url in
             // A stable id per URL (not a running counter) so the same photo
@@ -265,17 +275,50 @@ final class WebViewController: NSObject, ObservableObject {
     /// (e.g. `371193-20260926-090559.jpg` vs `...-090600.jpg`), so they're
     /// matched on the leading message number instead of the whole name.
     private static func dropThumbnailsWithFullSize(_ urls: [URL]) -> [URL] {
-        func key(_ url: URL) -> String {
-            let dir = url.deletingLastPathComponent().path
-                .replacingOccurrences(of: "/thumbnails", with: "/files")
-            let messageID = url.lastPathComponent.split(separator: "-").first.map(String.init)
-                ?? url.lastPathComponent
-            return "\(url.host ?? "")\(dir)/\(messageID)"
-        }
-        let fullSizeKeys = Set(urls.filter { $0.path.contains("/files/") }.map(key))
+        let fullSizeKeys = Set(urls.filter { $0.path.contains("/files/") }.map(fullSizeKey))
         return urls.filter { url in
             guard url.path.contains("/thumbnails/") else { return true }
-            return !fullSizeKeys.contains(key(url))
+            return !fullSizeKeys.contains(fullSizeKey(url))
+        }
+    }
+
+    /// Same key for a `/thumbnails/` URL and its `/files/` sibling: host +
+    /// directory (with thumbnails mapped to files) + leading number of the
+    /// filename. See `dropThumbnailsWithFullSize` for why only the leading
+    /// number is used.
+    private static func fullSizeKey(_ url: URL) -> String {
+        let dir = url.deletingLastPathComponent().path
+            .replacingOccurrences(of: "/thumbnails", with: "/files")
+        let messageID = url.lastPathComponent.split(separator: "-").first.map(String.init)
+            ?? url.lastPathComponent
+        return "\(url.host ?? "")\(dir)/\(messageID)"
+    }
+
+    /// Last three path components, e.g. `messages/thumbnails/370571-....jpg`
+    /// -- enough to tell message photos from member icons etc. in the log
+    /// without dumping whole signed URLs.
+    static func shortPath(_ url: URL) -> String {
+        url.pathComponents.suffix(3).joined(separator: "/")
+    }
+
+    /// Full-size (`/files/`) URLs seen inside the site's own API responses
+    /// (via NetworkTap.js), keyed like `fullSizeKey`. The timeline only
+    /// fetches thumbnails, but its API responses (`/v2/groups/<id>/timeline`,
+    /// `/v2/messages/<id>`) already carry signed full-size URLs -- so a
+    /// thumbnail actually shown on screen can be swapped for its full-size
+    /// version without the user opening each photo. Only used as a lookup
+    /// for thumbnails already being extracted: API responses also list
+    /// images never displayed (news banners etc.), which shouldn't be added.
+    /// Not reset on URL change -- it's a lookup table, not a list of what's
+    /// on screen.
+    private var apiFullSizeByKey: [String: URL] = [:]
+
+    fileprivate func rememberAPIFullSize(_ urls: [URL]) {
+        for url in urls where url.path.contains("/files/") {
+            apiFullSizeByKey[Self.fullSizeKey(url)] = url
+        }
+        if apiFullSizeByKey.count > 5000 {
+            apiFullSizeByKey.removeAll()
         }
     }
 
@@ -287,7 +330,7 @@ final class WebViewController: NSObject, ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     let newURL = webView.url?.absoluteString ?? ""
-                    if newURL != self.urlString { self.resetNetworkImageHistory() }
+                    if newURL != self.urlString { self.resetNetworkImageHistory(to: newURL) }
                     self.urlString = newURL
                 }
             },
@@ -572,11 +615,10 @@ extension WebViewController: WKScriptMessageHandler {
             AppLog.log("通信応答: \(endpoint) HTTP\(status) \(ctype) \(bytes)bytes 画像URLなし")
             return
         }
+        rememberAPIFullSize(images)
         let fullSize = images.filter { $0.path.contains("/files/") }.count
         let thumbs = images.filter { $0.path.contains("/thumbnails/") }.count
-        let samples = images.prefix(3)
-            .map { "\($0.deletingLastPathComponent().lastPathComponent)/\($0.lastPathComponent)" }
-            .joined(separator: ", ")
+        let samples = images.prefix(3).map(Self.shortPath).joined(separator: ", ")
         AppLog.log("通信応答: \(endpoint) HTTP\(status) \(ctype) \(bytes)bytes 画像URL\(total)件(files:\(fullSize) thumbnails:\(thumbs)) 例: \(samples)")
     }
 }
