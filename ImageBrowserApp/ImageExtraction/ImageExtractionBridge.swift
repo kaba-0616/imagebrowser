@@ -53,6 +53,22 @@ enum ImageExtractionBridge {
         return (result as? Int) ?? -1
     }
 
+    /// Diagnostic only: resource-timing entry count grouped by file
+    /// extension, read *before* `collect()` clears the buffer -- shows
+    /// what's actually being fetched when the image count isn't growing
+    /// (e.g. everything's `.js`/`.wasm`/`.ttf` and nothing new with an
+    /// image extension, meaning the page genuinely isn't re-fetching
+    /// photos on scroll, vs. images arriving in some form our filter
+    /// doesn't recognize).
+    static func resourceTimingBreakdown(in webView: WKWebView) async -> [String: Int] {
+        let script = "JSON.stringify(window.__ImageBrowserCollector.resourceTimingBreakdown())"
+        guard let result = try? await webView.evaluateJavaScript(script),
+              let jsonString = result as? String,
+              let data = jsonString.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: Int].self, from: data) else { return [:] }
+        return decoded
+    }
+
     /// Flutter Web pages (and similar canvas-rendered apps) never put photos
     /// in the DOM at all -- `findImage` above will always come back nil on
     /// them, not because of some save-blocking trick but because there is no

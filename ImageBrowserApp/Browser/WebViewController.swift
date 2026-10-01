@@ -173,7 +173,10 @@ final class WebViewController: NSObject, ObservableObject {
     private let networkImageMaxAge: TimeInterval = 3 * 60
 
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
+        // Both read the buffer *before* collect()'s resourceTimingImages()
+        // clears it -- same timing constraint, so they have to happen first.
         let rawCountBefore = await ImageExtractionBridge.rawResourceTimingCount(in: webView)
+        let breakdown = await ImageExtractionBridge.resourceTimingBreakdown(in: webView)
         let fresh = try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
 
         var nonNetwork: [PageImage] = []
@@ -186,7 +189,11 @@ final class WebViewController: NSObject, ObservableObject {
             nonNetwork.append(image)
         }
         seenNetworkImages = seenNetworkImages.filter { now.timeIntervalSince($0.value) <= networkImageMaxAge }
-        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件")
+
+        let breakdownText = breakdown.sorted { $0.value > $1.value }
+            .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件 / 拡張子内訳: \(breakdownText)")
+        AppLog.log("蓄積中の画像URL一覧: \(seenNetworkImages.keys.map { $0.lastPathComponent }.joined(separator: ", "))")
 
         let networkImages = seenNetworkImages.keys.map { url in
             // A stable id per URL (not a running counter) so the same photo

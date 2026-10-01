@@ -149,6 +149,22 @@
     // 同じ通信履歴スキャンで別途拾えるので、縮小版側は除外して重複を防ぐ。
     var THUMBNAIL_PATH = /\/thumbnails\//i;
 
+    // 診断用: クリアする「前」に、通信履歴全体を拡張子別に集計しておく。
+    // 画像が増えないとき、そもそも通信自体が起きていないのか、起きては
+    // いるが画像扱いされていないのか(拡張子なし・data:等)を切り分ける。
+    function resourceTimingBreakdown() {
+        var byExt = {};
+        try {
+            var entries = performance.getEntriesByType("resource");
+            for (var i = 0; i < entries.length; i++) {
+                var m = /\.([a-z0-9]+)(?:\?|#|$)/i.exec(entries[i].name);
+                var ext = m ? m[1].toLowerCase() : "(拡張子なし)";
+                byExt[ext] = (byExt[ext] || 0) + 1;
+            }
+        } catch (e) {}
+        return byExt;
+    }
+
     // 以前はここで「見つけたURLを時刻つきで憶えて何分か経ったら間引く」を
     // JS側(ページ内)でやっていたが、バックグラウンド中にiOSがWKWebViewの
     // 裏側のプロセスをメモリ節約のために作り直すと、ページ内のJS状態ごと
@@ -440,6 +456,7 @@
         findImageAt: findImageAt,
         findImageAtDebug: findImageAtDebug,
         isFlutterPage: isFlutterPage,
-        findCanvasRegionAt: findCanvasRegionAt
+        findCanvasRegionAt: findCanvasRegionAt,
+        resourceTimingBreakdown: resourceTimingBreakdown
     };
 })();
