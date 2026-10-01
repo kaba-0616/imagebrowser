@@ -181,6 +181,9 @@
             for (var i = 0; i < entries.length; i++) {
                 var url = entries[i].name;
                 if (!/\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(url)) { continue; }
+                // サイト自身のファビコン・ホーム画面用アイコン(Flutter Web標準の
+                // /icons/Icon-192.png 等)は保存対象ではない。
+                if (/\/favicon\.[a-z]+(\?|#|$)|\/icons\/Icon-(maskable-)?\d+\.png/i.test(url)) { continue; }
                 out.push(url);
             }
             // Swift側(WebViewController)が結果を累積して憶えておくので、

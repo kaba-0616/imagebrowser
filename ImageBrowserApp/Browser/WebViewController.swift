@@ -236,12 +236,41 @@ final class WebViewController: NSObject, ObservableObject {
         var cachedByKey: [String: URL] = [:]
         for url in validCached { cachedByKey[Self.fullSizeKey(url)] = url }
 
+        let baseCandidates = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
+
+        // Freshly signed URLs per message, straight from the site's API.
+        var freshFullByKey: [String: URL] = [:]
+        var freshThumbByKey: [String: URL] = [:]
+        let messageIDs = Array(Set(baseCandidates.compactMap(Self.messageID)))
+        if let origin = messageAPIOrigin, !messageIDs.isEmpty {
+            let refreshed = await refreshMessageImages(ids: messageIDs, origin: origin)
+            for url in refreshed.values.flatMap({ $0 }) {
+                if url.path.contains("/files/") {
+                    freshFullByKey[Self.fullSizeKey(url)] = url
+                } else if url.path.contains("/thumbnails/") {
+                    freshThumbByKey[Self.fullSizeKey(url)] = url
+                }
+            }
+            AppLog.log("メッセージAPIで最新URLを再取得: 依頼\(messageIDs.count)件・フルサイズ取得\(freshFullByKey.count)件・縮小版取得\(freshThumbByKey.count)件")
+        } else if !messageIDs.isEmpty {
+            AppLog.log("メッセージAPIの送信先が未確認のため最新URLの再取得をスキップ(\(messageIDs.count)件)")
+        }
+
         var upgradedFromAPI = 0
         var upgradedFromCache = 0
-        let candidates: [(url: URL, rendered: URL?)] = Self.dropThumbnailsWithFullSize(Self.latestPerPath(seenNetworkImages))
+        var refreshedCount = 0
+        let candidates: [(url: URL, rendered: URL?)] = baseCandidates
             .map { url in
-                guard url.path.contains("/thumbnails/") else { return (url, nil) }
                 let key = Self.fullSizeKey(url)
+                if let fresh = freshFullByKey[key] {
+                    refreshedCount += 1
+                    return (fresh, freshThumbByKey[key])
+                }
+                if let freshThumb = freshThumbByKey[key], url.path.contains("/thumbnails/") {
+                    refreshedCount += 1
+                    return (freshThumb, nil)
+                }
+                guard url.path.contains("/thumbnails/") else { return (url, nil) }
                 if let fullSize = apiFullSizeByKey[key], !Self.isExpired(fullSize, at: now) {
                     upgradedFromAPI += 1
                     return (fullSize, url)
@@ -255,7 +284,7 @@ final class WebViewController: NSObject, ObservableObject {
 
         let breakdownText = breakdown.sorted { $0.value > $1.value }
             .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
-        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / フルサイズに置換: API応答から\(upgradedFromAPI)件・端末内キャッシュから\(upgradedFromCache)件 / 拡張子内訳: \(breakdownText)")
+        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件・重複除外後\(candidates.count)件 / 最新URLに差し替え\(refreshedCount)件 / フルサイズに置換: API応答から\(upgradedFromAPI)件・端末内キャッシュから\(upgradedFromCache)件 / 拡張子内訳: \(breakdownText)")
         AppLog.log("端末内キャッシュのフルサイズURL: \(cachedFiles.count)件(期限内\(validCached.count)件・期限切れ\(cachedFiles.count - validCached.count)件)")
         AppLog.log("抽出対象の画像URL一覧: \(candidates.map { Self.shortPath($0.url) }.joined(separator: ", "))")
 
@@ -290,6 +319,46 @@ final class WebViewController: NSObject, ObservableObject {
     /// to read it synchronously during extraction via callAsyncJavaScript
     /// silently came back empty while the very same scan saw 86 URLs.
     private var idbFullSizeByKey: [String: URL] = [:]
+
+    /// Origin of the site's message API (e.g. `https://api.message.sakurazaka46.com`),
+    /// learned from NetworkTap reports. Set only for hosts starting with
+    /// `api.message.` serving `/v2/...` -- the only API shape the refresh
+    /// below knows how to call.
+    private var messageAPIOrigin: String?
+    private var pendingRefresh: [String: CheckedContinuation<[String: [URL]], Never>] = [:]
+
+    /// The site's app caches signed image URLs for days; past their
+    /// `Expires` CloudFront answers 403 -- for this app, even though the page
+    /// still shows them from the browser cache (seen on device: every
+    /// thumbnail and full-size in the grid failed with 403). Asks the site's
+    /// own `/v2/messages/<id>` endpoint, with the page's own auth headers,
+    /// for freshly signed URLs. Returns message ID -> image URLs.
+    private func refreshMessageImages(ids: [String], origin: String) async -> [String: [URL]] {
+        let requestID = UUID().uuidString
+        guard let idsData = try? JSONSerialization.data(withJSONObject: ids),
+              let idsJSON = String(data: idsData, encoding: .utf8) else { return [:] }
+        return await withCheckedContinuation { continuation in
+            pendingRefresh[requestID] = continuation
+            let script = "window.__ImageBrowserRefreshMessageImages && window.__ImageBrowserRefreshMessageImages('\(requestID)', '\(origin)', \(idsJSON)); true"
+            webView.evaluateJavaScript(script, completionHandler: nil)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                if let pending = self?.pendingRefresh.removeValue(forKey: requestID) {
+                    AppLog.log("メッセージAPIでの最新URL再取得がタイムアウト(10秒)", isError: true)
+                    pending.resume(returning: [:])
+                }
+            }
+        }
+    }
+
+    /// Leading number of a `/messages/` filename (`370571-20260919-....jpg`
+    /// -> `370571`), which is the message ID the API takes.
+    private static func messageID(of url: URL) -> String? {
+        guard url.path.contains("/messages/"),
+              let first = url.lastPathComponent.split(separator: "-").first,
+              first.allSatisfy(\.isNumber) else { return nil }
+        return String(first)
+    }
 
     private func requestStorageScan() {
         webView.evaluateJavaScript("window.__ImageBrowserStorageReport && window.__ImageBrowserStorageReport(); true", completionHandler: nil)
@@ -659,6 +728,18 @@ extension WebViewController: WKScriptMessageHandler {
             : "画像URLなし"
 
         switch kind {
+        case "refresh":
+            guard let requestID = body["requestID"] as? String,
+                  let continuation = pendingRefresh.removeValue(forKey: requestID) else { return }
+            let raw = body["results"] as? [String: [String]] ?? [:]
+            let results = raw.mapValues { $0.compactMap(URL.init(string:)) }
+            let statuses = (body["statuses"] as? [String: Int] ?? [:])
+                .sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+            // Header *names* only -- values are auth tokens.
+            let headerNames = (body["headerNames"] as? [String] ?? []).joined(separator: ", ")
+            AppLog.log("メッセージAPI再取得の応答: HTTP内訳[\(statuses)] 付与した認証ヘッダー名[\(headerNames.isEmpty ? "なし" : headerNames)]")
+            continuation.resume(returning: results)
+            return
         case "ws-open":
             AppLog.log("WebSocket接続: \(rawURL)")
         case "ws":
@@ -686,6 +767,10 @@ extension WebViewController: WKScriptMessageHandler {
                 AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): レコード\(body["records"] as? Int ?? 0)件 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)、対応表に\(fileURLs.count)件登録)")
             }
         default:
+            if let url = URL(string: rawURL, relativeTo: webView.url)?.absoluteURL,
+               let host = url.host, host.hasPrefix("api.message."), url.path.hasPrefix("/v2/") {
+                messageAPIOrigin = "\(url.scheme ?? "https")://\(host)"
+            }
             let status = body["status"] as? Int ?? 0
             let ctype = body["ctype"] as? String ?? ""
             let bytes = body["bytes"] as? Int ?? 0

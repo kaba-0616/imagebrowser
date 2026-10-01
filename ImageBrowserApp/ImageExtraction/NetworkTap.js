@@ -24,6 +24,31 @@
         try { window.webkit.messageHandlers.imageBrowserNet.postMessage(payload); } catch (e) {}
     }
 
+    // ページ自身がAPI呼び出しに付けている認証系ヘッダー(Authorization と
+    // x-で始まるもの)を、送信先オリジンごとにメモリ上でだけ憶えておく。
+    // 期限切れ署名URLの差し替え(__ImageBrowserRefreshMessageImages)で、
+    // ページと同じ権限のままAPIを呼び直すため。値はログにも外にも出さない。
+    var authHeadersByOrigin = {};
+    function rememberHeader(url, name, value) {
+        try {
+            if (!/^authorization$|^x-/i.test(String(name))) { return; }
+            var origin = new URL(String(url), location.href).origin;
+            (authHeadersByOrigin[origin] = authHeadersByOrigin[origin] || {})[name] = value;
+        } catch (e) {}
+    }
+    function rememberFetchHeaders(url, headers) {
+        try {
+            if (!headers) { return; }
+            if (typeof headers.forEach === "function" && !Array.isArray(headers)) {
+                headers.forEach(function (value, name) { rememberHeader(url, name, value); });
+            } else if (Array.isArray(headers)) {
+                headers.forEach(function (pair) { rememberHeader(url, pair[0], pair[1]); });
+            } else {
+                Object.keys(headers).forEach(function (name) { rememberHeader(url, name, headers[name]); });
+            }
+        } catch (e) {}
+    }
+
     function findImages(text) {
         var images = [];
         if (!text) { return images; }
@@ -218,7 +243,12 @@
 
     var originalFetch = window.fetch;
     if (originalFetch) {
-        window.fetch = function (input) {
+        window.fetch = function (input, init) {
+            try {
+                var headerURL = (input && input.url) || input;
+                if (input && input.headers) { rememberFetchHeaders(headerURL, input.headers); }
+                if (init && init.headers) { rememberFetchHeaders(headerURL, init.headers); }
+            } catch (e) {}
             var promise = originalFetch.apply(this, arguments);
             try {
                 var reqURL = (input && input.url) || input;
@@ -245,6 +275,49 @@
     XMLHttpRequest.prototype.open = function (method, url) {
         this.__ibURL = url;
         return originalOpen.apply(this, arguments);
+    };
+    var originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+        rememberHeader(this.__ibURL, name, value);
+        return originalSetRequestHeader.apply(this, arguments);
+    };
+
+    // 一括抽出用: メッセージ番号ごとに /v2/messages/<番号> をページと同じ
+    // 認証ヘッダーで呼び直し、その場で署名された最新の画像URLを集めて
+    // アプリ本体へ返す(kind: "refresh")。さくら坂46メッセージは過去
+    // メッセージの署名付きURLを端末内に何日もキャッシュしていて、それらは
+    // 期限切れのためアプリから取得すると403になる。ページ側はブラウザの
+    // キャッシュで表示できているだけ。同時実行は4件まで。
+    window.__ImageBrowserRefreshMessageImages = function (requestID, apiOrigin, ids) {
+        var headers = authHeadersByOrigin[apiOrigin] || {};
+        var results = {};
+        var statuses = {};
+        var index = 0, active = 0, finished = false;
+        function finish() {
+            if (finished) { return; }
+            finished = true;
+            post({ kind: "refresh", requestID: requestID, results: results, statuses: statuses, headerNames: Object.keys(headers) });
+        }
+        function next() {
+            if (index >= ids.length && active === 0) { finish(); return; }
+            while (active < 4 && index < ids.length) {
+                (function (id) {
+                    active++;
+                    originalFetch.call(window, apiOrigin + "/v2/messages/" + encodeURIComponent(id), { headers: headers, credentials: "include" })
+                        .then(function (res) {
+                            statuses[res.status] = (statuses[res.status] || 0) + 1;
+                            return res.status === 200 ? res.text() : "";
+                        })
+                        .then(function (text) { results[id] = findImages(text); }, function () {
+                            statuses.error = (statuses.error || 0) + 1;
+                            results[id] = [];
+                        })
+                        .then(function () { active--; next(); });
+                })(ids[index++]);
+            }
+        }
+        if (!originalFetch || !ids || !ids.length) { finish(); return; }
+        next();
     };
     XMLHttpRequest.prototype.send = function () {
         var xhr = this;
