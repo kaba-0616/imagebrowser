@@ -269,7 +269,7 @@ final class WebViewController: NSObject, ObservableObject {
             // dictionary ordering, making "already saved" tracking useless
             // for this fallback path. Offset well clear of the DOM-origin
             // items' 0..<N ids above.
-            PageImage(
+            return PageImage(
                 // `abs(hashValue)` would trap if hashValue happened to be
                 // Int.min; going through UInt sidesteps that.
                 id: 1_000_000 + Int(UInt(bitPattern: url.absoluteString.hashValue) % 1_000_000),
