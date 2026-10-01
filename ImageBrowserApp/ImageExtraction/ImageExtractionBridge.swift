@@ -41,6 +41,18 @@ enum ImageExtractionBridge {
         let url: String?
     }
 
+    /// Diagnostic only (see WebViewController.extractImages' log line): how
+    /// many resource-timing entries exist right now, image or not. If this
+    /// is already sitting at WebKit's buffer cap before we even look at
+    /// image extensions, new fetches from scrolling further simply aren't
+    /// being recorded at all, which looks identical to "nothing new to
+    /// find" from the JS side.
+    static func rawResourceTimingCount(in webView: WKWebView) async -> Int {
+        let script = "performance.getEntriesByType('resource').length"
+        let result = try? await webView.evaluateJavaScript(script)
+        return (result as? Int) ?? -1
+    }
+
     /// Flutter Web pages (and similar canvas-rendered apps) never put photos
     /// in the DOM at all -- `findImage` above will always come back nil on
     /// them, not because of some save-blocking trick but because there is no

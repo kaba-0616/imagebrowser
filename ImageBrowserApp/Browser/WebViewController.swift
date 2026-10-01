@@ -173,10 +173,12 @@ final class WebViewController: NSObject, ObservableObject {
     private let networkImageMaxAge: TimeInterval = 3 * 60
 
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
+        let rawCountBefore = await ImageExtractionBridge.rawResourceTimingCount(in: webView)
         let fresh = try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
 
         var nonNetwork: [PageImage] = []
         let now = Date()
+        let newNetworkCount = fresh.filter { $0.origin == "network" }.count
         for image in fresh where image.origin == "network" {
             seenNetworkImages[image.url] = now
         }
@@ -184,6 +186,7 @@ final class WebViewController: NSObject, ObservableObject {
             nonNetwork.append(image)
         }
         seenNetworkImages = seenNetworkImages.filter { now.timeIntervalSince($0.value) <= networkImageMaxAge }
+        AppLog.log("一括抽出の内訳: DOM等\(nonNetwork.count)件 / 通信履歴 全エントリ\(rawCountBefore)件中、画像\(newNetworkCount)件・蓄積合計\(seenNetworkImages.count)件")
 
         let networkImages = seenNetworkImages.keys.map { url in
             // A stable id per URL (not a running counter) so the same photo
