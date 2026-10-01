@@ -3,6 +3,7 @@ import SwiftDraw
 
 enum ImageLoadError: Error {
     case decodeFailed
+    case httpStatus(Int)
 }
 
 enum SVGRasterizer {

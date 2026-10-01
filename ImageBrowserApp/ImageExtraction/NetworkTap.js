@@ -124,32 +124,31 @@
                     var tx = db.transaction(storeNames, "readonly");
                     storeNames.forEach(function (storeName) {
                         var records = 0, total = 0, files = 0;
+                        var fileURLs = {};
                         var cursorReq = tx.objectStore(storeName).openCursor();
                         cursorReq.onsuccess = function () {
                             var cursor = cursorReq.result;
-                            if (cursor && records < 5000) {
+                            if (cursor && records < 20000) {
                                 records++;
-                                var text = "";
-                                try {
-                                    var v = cursor.value;
-                                    if (typeof v === "string") {
-                                        text = v;
-                                    } else if (v instanceof ArrayBuffer || ArrayBuffer.isView(v)) {
-                                        // Flutter(Hive等)はバイナリで保存することがある。
-                                        // URLはASCIIなので、UTF-8として読めば文字列で見つかる。
-                                        text = new TextDecoder("utf-8").decode(v);
-                                    } else {
-                                        text = JSON.stringify(v);
-                                    }
-                                } catch (e) {}
-                                var imgs = findImages(text);
+                                // Flutter(SQLite on IndexedDB等)はバイナリで保存する。
+                                // URLはASCIIなので、UTF-8として読めば文字列で見つかる。
+                                var imgs = findImages(idbValueText(cursor.value));
                                 total += imgs.length;
                                 for (var j = 0; j < imgs.length; j++) {
-                                    if (imgs[j].indexOf("/files/") !== -1) { files++; }
+                                    if (imgs[j].indexOf("/files/") !== -1) {
+                                        files++;
+                                        fileURLs[imgs[j]] = 1;
+                                    }
                                 }
                                 cursor.continue();
                             } else {
-                                post({ kind: "idb-store", db: name, store: storeName, records: records, total: total, files: files });
+                                // fileURLs: アプリ本体側で、一括抽出時に縮小版を
+                                // フルサイズへ置き換えるための対応表として使う。
+                                post({
+                                    kind: "idb-store", db: name, store: storeName,
+                                    records: records, total: total, files: files,
+                                    fileURLs: Object.keys(fileURLs).slice(0, 5000)
+                                });
                             }
                         };
                         cursorReq.onerror = function () {
@@ -176,67 +175,6 @@
             return "";
         }
     }
-
-    // 一括抽出用: 端末内のIndexedDB(アプリのキャッシュDB)にあるフルサイズ
-    // (/files/)画像URLをすべて集めて返す(Promise)。さくら坂46メッセージは
-    // 過去メッセージをIndexedDB上のSQLiteにキャッシュしていて、タイムラインの
-    // APIは新着の差分しか返さない。そのためフルサイズURLはここにしかない。
-    // 読み取り専用。Firebaseの内部DBは対象外。
-    window.__ImageBrowserCachedFileURLs = function () {
-        return new Promise(function (resolve) {
-            var found = {};
-            function done() { resolve(Object.keys(found)); }
-            try {
-                if (!indexedDB || !indexedDB.databases) { done(); return; }
-                indexedDB.databases().then(function (dbs) {
-                    var targets = dbs.filter(function (d) { return d.name && d.name.indexOf("firebase") !== 0; });
-                    var pending = targets.length;
-                    if (!pending) { done(); return; }
-                    function finishOne() { pending--; if (pending === 0) { done(); } }
-                    targets.forEach(function (d) {
-                        try {
-                            var req = indexedDB.open(d.name);
-                            req.onerror = finishOne;
-                            req.onsuccess = function () {
-                                var db = req.result;
-                                try {
-                                    var names = Array.prototype.slice.call(db.objectStoreNames);
-                                    if (!names.length) { db.close(); finishOne(); return; }
-                                    var tx = db.transaction(names, "readonly");
-                                    names.forEach(function (storeName) {
-                                        var records = 0;
-                                        var cursorReq = tx.objectStore(storeName).openCursor();
-                                        cursorReq.onsuccess = function () {
-                                            var cursor = cursorReq.result;
-                                            if (!cursor || records >= 20000) { return; }
-                                            records++;
-                                            var imgs = findImages(idbValueText(cursor.value));
-                                            for (var j = 0; j < imgs.length; j++) {
-                                                if (imgs[j].indexOf("/files/") !== -1) { found[imgs[j]] = 1; }
-                                            }
-                                            cursor.continue();
-                                        };
-                                    });
-                                    tx.oncomplete = function () { db.close(); finishOne(); };
-                                    tx.onerror = function () { try { db.close(); } catch (e) {} finishOne(); };
-                                    tx.onabort = tx.onerror;
-                                } catch (e) {
-                                    try { db.close(); } catch (e2) {}
-                                    finishOne();
-                                }
-                            };
-                        } catch (e) {
-                            finishOne();
-                        }
-                    });
-                }, done);
-            } catch (e) {
-                done();
-            }
-            // 何かが詰まっても抽出全体を止めないよう、上限5秒で打ち切る。
-            setTimeout(done, 5000);
-        });
-    };
 
     // 一括抽出のタイミングでアプリ本体から呼ばれる。端末内の保存領域
     // (localStorage/sessionStorage/IndexedDB)に画像URLがどれだけ入っているか

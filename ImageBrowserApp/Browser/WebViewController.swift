@@ -204,15 +204,16 @@ final class WebViewController: NSObject, ObservableObject {
         AppLog.log("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件をリセット)")
         seenNetworkImages.removeAll()
         webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
+        requestStorageScan()
     }
 
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
         // Both read the buffer *before* collect()'s resourceTimingImages()
         // clears it -- same timing constraint, so they have to happen first.
-        // Diagnostic: report what's cached in the page's local storage /
-        // IndexedDB (NetworkTap.js). Results arrive asynchronously as
-        // separate log lines.
-        _ = try? await webView.evaluateJavaScript("window.__ImageBrowserStorageReport && window.__ImageBrowserStorageReport(); true")
+        // Refreshes `idbFullSizeByKey` for the *next* extraction too; results
+        // arrive asynchronously, so this one uses what the page-load/URL-
+        // change scan already collected.
+        requestStorageScan()
         let rawCountBefore = await ImageExtractionBridge.rawResourceTimingCount(in: webView)
         let breakdown = await ImageExtractionBridge.resourceTimingBreakdown(in: webView)
         let fresh = try await ImageExtractionBridge.collect(in: webView, withBackgrounds: withBackgrounds)
@@ -228,11 +229,9 @@ final class WebViewController: NSObject, ObservableObject {
         }
 
         // Full-size URLs the site's own app has cached in IndexedDB (see
-        // NetworkTap.js' __ImageBrowserCachedFileURLs): past messages are
-        // drawn from that cache, and the timeline API only returns new ones,
-        // so this is the only place their full-size URLs exist. Signed URLs
-        // past their `Expires` would just 403, so those aren't used.
-        let cachedFiles = await cachedFullSizeURLs()
+        // `idbFullSizeByKey`). Signed URLs past their `Expires` would just
+        // 403, so those aren't used.
+        let cachedFiles = Array(idbFullSizeByKey.values)
         let validCached = cachedFiles.filter { !Self.isExpired($0, at: now) }
         var cachedByKey: [String: URL] = [:]
         for url in validCached { cachedByKey[Self.fullSizeKey(url)] = url }
@@ -282,11 +281,18 @@ final class WebViewController: NSObject, ObservableObject {
         return nonNetwork + networkImages
     }
 
-    private func cachedFullSizeURLs() async -> [URL] {
-        let script = "return window.__ImageBrowserCachedFileURLs ? await window.__ImageBrowserCachedFileURLs() : [];"
-        guard let result = try? await webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page),
-              let strings = result as? [String] else { return [] }
-        return strings.compactMap(URL.init(string:))
+    /// Full-size (`/files/`) URLs found in the site's own IndexedDB cache,
+    /// keyed like `fullSizeKey`. Sakurazaka46 Message keeps past messages in
+    /// a SQLite database stored in IndexedDB and its timeline API only
+    /// returns new ones, so for older photos this cache is the only place a
+    /// full-size URL exists. Filled from NetworkTap.js' storage scan, which
+    /// runs on page load, URL change and extraction -- an earlier attempt
+    /// to read it synchronously during extraction via callAsyncJavaScript
+    /// silently came back empty while the very same scan saw 86 URLs.
+    private var idbFullSizeByKey: [String: URL] = [:]
+
+    private func requestStorageScan() {
+        webView.evaluateJavaScript("window.__ImageBrowserStorageReport && window.__ImageBrowserStorageReport(); true", completionHandler: nil)
     }
 
     /// CloudFront signed URLs carry an `Expires` epoch-seconds parameter;
@@ -568,6 +574,7 @@ extension WebViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         AppLog.log("読み込み完了: \(webView.url?.absoluteString ?? "?")")
         captureThumbnail()
+        requestStorageScan()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -673,7 +680,10 @@ extension WebViewController: WKScriptMessageHandler {
             if let error = body["error"] as? String {
                 AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): 読み取り失敗 \(error)")
             } else {
-                AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): レコード\(body["records"] as? Int ?? 0)件 画像URL\(total)件(files:\(body["files"] as? Int ?? 0))")
+                let fileURLs = (body["fileURLs"] as? [String] ?? []).compactMap(URL.init(string:))
+                for url in fileURLs { idbFullSizeByKey[Self.fullSizeKey(url)] = url }
+                if idbFullSizeByKey.count > 10000 { idbFullSizeByKey.removeAll() }
+                AppLog.log("IndexedDB \(body["db"] as? String ?? "")/\(body["store"] as? String ?? ""): レコード\(body["records"] as? Int ?? 0)件 画像URL\(total)件(files:\(body["files"] as? Int ?? 0)、対応表に\(fileURLs.count)件登録)")
             }
         default:
             let status = body["status"] as? Int ?? 0

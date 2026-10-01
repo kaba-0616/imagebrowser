@@ -128,7 +128,14 @@ final class ImageLoader: ObservableObject {
                 self.storeThumbnail(thumbnail, for: image.id)
                 self.record(pixelSize, for: image, from: from)
             } catch {
-                if !Task.isCancelled { self.failed.insert(image.id) }
+                if !Task.isCancelled {
+                    self.failed.insert(image.id)
+                    // The ⚠ cells in the grid -- logged so it's visible which
+                    // image failed and why (e.g. a signed URL past its Expires
+                    // comes back as HTTP 403).
+                    let path = image.url.pathComponents.suffix(3).joined(separator: "/")
+                    AppLog.log("グリッド画像の読み込み失敗: \(path) — \(error)", isError: true)
+                }
             }
             self.tasks[image.id] = nil
         }
@@ -179,7 +186,10 @@ final class ImageLoader: ObservableObject {
     private func downloadThumbnail(
         url: URL, maxPixelSize: CGFloat, isSVG: Bool
     ) async throws -> (image: UIImage, pixelSize: CGSize?) {
-        let (data, _) = try await session.data(from: url)
+        let (data, response) = try await session.data(from: url)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw ImageLoadError.httpStatus(http.statusCode)
+        }
 
         if isSVG {
             let rendered = try SVGRasterizer.rasterize(data: data, maxPixelSize: maxPixelSize)
