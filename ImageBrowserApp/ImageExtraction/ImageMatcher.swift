@@ -25,7 +25,16 @@ enum ImageMatcher {
     }()
 
     /// Closest first. Candidates that couldn't be downloaded are left out.
-    static func rank(snapshot: CGImage, candidates: [PageImage]) async -> [Score] {
+    ///
+    /// Two ways a photo can sit on screen, and both are tried per candidate:
+    /// - timeline bubble: the photo is cover-cropped into the bubble, so the
+    ///   candidate is cropped to the snapshot's shape;
+    /// - full-screen viewer: the whole photo is shown (letterbox bars are
+    ///   trimmed off the snapshot first), while the candidate compared is a
+    ///   thumbnail that may itself be cropped (e.g. square) -- so the
+    ///   snapshot is cropped to the candidate's shape instead.
+    static func rank(snapshot rawSnapshot: CGImage, candidates: [PageImage]) async -> [Score] {
+        let snapshot = trimUniformBorders(rawSnapshot)
         guard snapshot.height > 0 else { return [] }
         let aspect = CGFloat(snapshot.width) / CGFloat(snapshot.height)
         guard let target = fingerprint(snapshot, aspect: aspect) else { return [] }
@@ -37,8 +46,15 @@ enum ImageMatcher {
                     if image == nil, candidate.renderedURL != nil {
                         image = await loadSmall(candidate.url)
                     }
-                    guard let image, let print = fingerprint(image, aspect: aspect) else { return nil }
-                    return Score(image: candidate, distance: distance(target, print))
+                    guard let image, image.height > 0, let print = fingerprint(image, aspect: aspect) else { return nil }
+                    var best = distance(target, print)
+                    let candidateAspect = CGFloat(image.width) / CGFloat(image.height)
+                    if abs(candidateAspect - aspect) / aspect > 0.05,
+                       let wholeCandidate = fingerprint(image, aspect: candidateAspect),
+                       let snapshotCropped = fingerprint(snapshot, aspect: candidateAspect) {
+                        best = min(best, distance(snapshotCropped, wholeCandidate))
+                    }
+                    return Score(image: candidate, distance: best)
                 }
             }
             var scores: [Score] = []
@@ -96,6 +112,54 @@ enum ImageMatcher {
         let values = pixels.map { Double($0) / 255 }
         let mean = values.reduce(0, +) / Double(values.count)
         return values.map { $0 - mean }
+    }
+
+    /// Cuts off flat, single-color bands along each edge -- the black/white
+    /// letterbox a full-screen viewer puts around a photo whose shape
+    /// doesn't match the screen. Measured on a small grayscale copy; a band
+    /// counts as flat when its brightness barely varies. Returns the
+    /// original when trimming would leave almost nothing (a mostly flat
+    /// image, which is better compared as-is).
+    static func trimUniformBorders(_ image: CGImage) -> CGImage {
+        let scale = min(1, 128 / CGFloat(max(image.width, image.height)))
+        let width = max(1, Int(CGFloat(image.width) * scale))
+        let height = max(1, Int(CGFloat(image.height) * scale))
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width,
+                space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return image }
+
+        func isFlat(_ values: [UInt8]) -> Bool {
+            guard let low = values.min(), let high = values.max() else { return true }
+            return Int(high) - Int(low) <= 12
+        }
+        func row(_ y: Int) -> [UInt8] { Array(pixels[(y * width)..<((y + 1) * width)]) }
+        func column(_ x: Int) -> [UInt8] { (0..<height).map { pixels[$0 * width + x] } }
+
+        // Bitmap rows run top to bottom here (CGContext memory order).
+        var top = 0, bottom = height - 1, left = 0, right = width - 1
+        while top < bottom, isFlat(row(top)) { top += 1 }
+        while bottom > top, isFlat(row(bottom)) { bottom -= 1 }
+        while left < right, isFlat(column(left)) { left += 1 }
+        while right > left, isFlat(column(right)) { right -= 1 }
+
+        let keptWidth = right - left + 1
+        let keptHeight = bottom - top + 1
+        guard keptWidth * keptHeight >= width * height / 5,
+              keptWidth < width || keptHeight < height else { return image }
+        let rect = CGRect(
+            x: CGFloat(left) / scale, y: CGFloat(top) / scale,
+            width: CGFloat(keptWidth) / scale, height: CGFloat(keptHeight) / scale
+        ).integral
+        return image.cropping(to: rect) ?? image
     }
 
     private static func distance(_ a: [Double], _ b: [Double]) -> Double {

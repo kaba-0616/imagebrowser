@@ -608,7 +608,8 @@ final class WebViewController: NSObject, ObservableObject {
         let top = ranked.prefix(3)
             .map { "\(Self.shortPath($0.image.url))=\(String(format: "%.3f", $0.distance))" }
             .joined(separator: ", ")
-        AppLog.log("長押し画像の照合: 候補\(candidates.count)件・比較できた\(ranked.count)件 \(elapsed)ms 上位: \(top.isEmpty ? "なし" : top)")
+        let trimmed = ImageMatcher.trimUniformBorders(cgImage)
+        AppLog.log("長押し画像の照合: 候補\(candidates.count)件・比較できた\(ranked.count)件 \(elapsed)ms 画面切り出し\(cgImage.width)x\(cgImage.height)→余白除去後\(trimmed.width)x\(trimmed.height) 上位: \(top.isEmpty ? "なし" : top)")
 
         guard let best = ranked.first, best.distance < Self.matchThreshold else {
             AppLog.log("長押し画像の照合: 一致する画像なし、切り出しで保存")
