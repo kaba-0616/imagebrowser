@@ -150,16 +150,22 @@ enum ImageMatcher {
         // UI backgrounds are drawn as exact colors; photo content, even a
         // plain wall, has noise and gradients well above this.
         let tolerance = 6
+        // "Mostly" one color (85% of the line), not entirely: a small UI
+        // element overlapping the background beside a photo -- the floating
+        // scroll-down button on Sakurazaka46 Message -- otherwise kept the
+        // box growing past the photo's edge (seen on device: a 208pt-wide
+        // photo detected as 259pt, and the match failed).
         func isFlat(_ indices: [Int]) -> Bool {
-            var low = [255, 255, 255], high = [0, 0, 0]
-            for index in indices {
-                for channel in 0..<3 {
-                    let value = Int(pixels[index * 4 + channel])
-                    low[channel] = min(low[channel], value)
-                    high[channel] = max(high[channel], value)
-                }
+            guard !indices.isEmpty else { return true }
+            // Reference color: the line's per-channel median.
+            let reference = (0..<3).map { channel -> Int in
+                let values = indices.map { Int(pixels[$0 * 4 + channel]) }.sorted()
+                return values[values.count / 2]
             }
-            return (0..<3).allSatisfy { high[$0] - low[$0] <= tolerance }
+            let close = indices.filter { index in
+                (0..<3).allSatisfy { abs(Int(pixels[index * 4 + $0]) - reference[$0]) <= tolerance }
+            }.count
+            return Double(close) >= Double(indices.count) * 0.85
         }
         func rowFlat(_ y: Int, _ x0: Int, _ x1: Int) -> Bool { isFlat((x0...x1).map { y * width + $0 }) }
         func columnFlat(_ x: Int, _ y0: Int, _ y1: Int) -> Bool { isFlat((y0...y1).map { $0 * width + x }) }
