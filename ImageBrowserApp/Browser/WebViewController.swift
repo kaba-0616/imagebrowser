@@ -718,7 +718,20 @@ final class WebViewController: NSObject, ObservableObject {
         var photoCrop: UIImage?
     }
 
-    private func findOriginal(onScreen screen: UIImage, at point: CGPoint) async -> LongPressLookup {
+    /// Second attempt when the first found nothing (user request: try once
+    /// more before reporting failure). The screen is captured again -- the
+    /// first one may have caught the site's own long-press overlay -- and
+    /// every photo in the talk is compared, without the shape filter or cap.
+    func retryOriginalLookup(at point: CGPoint) async -> LongPressLookup {
+        AppLog.log("長押し画像の照合: 再試行(画面を撮り直し、候補をトークの写真全件に広げる)")
+        guard let screen = await captureCrop(around: point, region: webView.bounds, margin: 0) else {
+            AppLog.log("長押し画像の照合: 再試行用の画面を撮れず中止", isError: true)
+            return LongPressLookup()
+        }
+        return await findOriginal(onScreen: screen, at: point, thorough: true)
+    }
+
+    private func findOriginal(onScreen screen: UIImage, at point: CGPoint, thorough: Bool = false) async -> LongPressLookup {
         let started = Date()
         // Always redrawn into a plain bitmap: takeSnapshot's UIImage isn't
         // guaranteed to be CGImage-backed, and `.cgImage` on it came back nil
@@ -741,7 +754,7 @@ final class WebViewController: NSObject, ObservableObject {
 
         let trimmed = ImageMatcher.trimUniformBorders(photo)
         let aspect = CGFloat(trimmed.width) / CGFloat(max(trimmed.height, 1))
-        var candidates = await timelineCandidates(photoAspect: aspect) ?? []
+        var candidates = await timelineCandidates(photoAspect: aspect, thorough: thorough) ?? []
         if candidates.isEmpty {
             candidates = await longPressCandidates()
         }
@@ -776,7 +789,7 @@ final class WebViewController: NSObject, ObservableObject {
     /// shown whole both in the timeline and in the viewer, so its on-screen
     /// aspect ratio matches its thumbnail's. nil when this isn't a message
     /// site's talk page.
-    private func timelineCandidates(photoAspect: CGFloat) async -> [PageImage]? {
+    private func timelineCandidates(photoAspect: CGFloat, thorough: Bool = false) async -> [PageImage]? {
         guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return nil }
         let messages = await fetchTimeline(groupID: groupID, origin: origin)
         let media = messages.filter { !$0.isVideo && ($0.file != nil || $0.thumbnail != nil) }
@@ -786,7 +799,9 @@ final class WebViewController: NSObject, ObservableObject {
         }
         // Newest first (the API returns oldest first), capped so a member
         // with years of photos doesn't mean hundreds of downloads.
-        let pool = Array((sameShape.isEmpty ? media : sameShape).reversed().prefix(300))
+        let pool = thorough
+            ? Array(media.reversed())
+            : Array((sameShape.isEmpty ? media : sameShape).reversed().prefix(300))
         AppLog.log("長押し画像の照合: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(media.count)件(サイズ情報あり\(withShape.count)件・縦横比が一致\(sameShape.count)件、画面上の縦横比\(String(format: "%.3f", photoAspect))) → 候補\(pool.count)件")
         if !pool.isEmpty {
             return pool.compactMap { message in

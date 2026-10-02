@@ -111,7 +111,13 @@ enum ImageMatcher {
         guard drawn else { return nil }
         let values = pixels.map { Double($0) / 255 }
         let mean = values.reduce(0, +) / Double(values.count)
-        return values.map { $0 - mean }
+        let centered = values.map { $0 - mean }
+        // Contrast-normalized too (to a typical photo's spread of 0.2), so a
+        // screen dimmed by the site's own long-press overlay still compares
+        // as the same photo. Near-flat images are left as they are.
+        let spread = (centered.reduce(0) { $0 + $1 * $1 } / Double(centered.count)).squareRoot()
+        guard spread > 0.02 else { return centered }
+        return centered.map { $0 * 0.2 / spread }
     }
 
     /// The on-screen frame of the photo under `point` (both in the image's

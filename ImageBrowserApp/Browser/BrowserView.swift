@@ -98,7 +98,7 @@ private struct BrowserTabContentView: View {
                                     if let url = controller.longPressedImageURL {
                                         saveSingle(url)
                                     } else if controller.longPressedSnapshotImage != nil {
-                                        saveOriginalIfFound(lookup: controller.longPressOriginalLookup)
+                                        saveOriginalIfFound(lookup: controller.longPressOriginalLookup, at: point)
                                     }
                                     controller.dismissLongPressMenu()
                                 },
@@ -336,9 +336,13 @@ private struct BrowserTabContentView: View {
     /// found one (see WebViewController.findOriginal). A screen crop is
     /// never saved -- the user only wants originals, so when none is found
     /// it says so instead.
-    private func saveOriginalIfFound(lookup: Task<WebViewController.LongPressLookup, Never>?) {
+    private func saveOriginalIfFound(lookup: Task<WebViewController.LongPressLookup, Never>?, at point: CGPoint) {
         Task {
-            guard let original = await lookup?.value.original else {
+            var found = await lookup?.value.original
+            if found == nil {
+                found = await controller.retryOriginalLookup(at: point).original
+            }
+            guard let original = found else {
                 AppLog.log("長押し: 原寸画像を特定できなかったため保存せず")
                 longPressNotice = "この写真の元の画像を特定できなかったため、保存しませんでした。"
                 return
