@@ -48,6 +48,18 @@ enum ImageMatcher {
                     }
                     guard let image, image.height > 0, let print = fingerprint(image, aspect: aspect) else { return nil }
                     var best = distance(target, print)
+                    // A timeline photo scrolled partly off the top or bottom
+                    // of the screen shows only its upper or lower part --
+                    // wider than the photo itself. Compare against both ends
+                    // (which side is hidden isn't known).
+                    let candidateShape = CGFloat(image.width) / CGFloat(image.height)
+                    if candidateShape < aspect * 0.95 {
+                        for anchor in [VerticalAnchor.top, .bottom] {
+                            if let part = fingerprint(image, aspect: aspect, anchor: anchor) {
+                                best = min(best, distance(target, part))
+                            }
+                        }
+                    }
                     let candidateAspect = CGFloat(image.width) / CGFloat(image.height)
                     if abs(candidateAspect - aspect) / aspect > 0.05,
                        let wholeCandidate = fingerprint(image, aspect: candidateAspect),
@@ -82,7 +94,10 @@ enum ImageMatcher {
     /// draws photos "cover"-fitted into their frame), then shrinks to a
     /// side x side grayscale grid with the mean subtracted, so a slightly
     /// different brightness/compression still compares as the same photo.
-    private static func fingerprint(_ image: CGImage, aspect: CGFloat) -> [Double]? {
+    /// Which part of a taller image to keep when cropping it to a wider shape.
+    enum VerticalAnchor { case center, top, bottom }
+
+    private static func fingerprint(_ image: CGImage, aspect: CGFloat, anchor: VerticalAnchor = .center) -> [Double]? {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)
         guard width > 0, height > 0, aspect > 0 else { return nil }
@@ -92,7 +107,13 @@ enum ImageMatcher {
             crop = CGRect(x: (width - newWidth) / 2, y: 0, width: newWidth, height: height)
         } else {
             let newHeight = width / aspect
-            crop = CGRect(x: 0, y: (height - newHeight) / 2, width: width, height: newHeight)
+            let y: CGFloat
+            switch anchor {
+            case .center: y = (height - newHeight) / 2
+            case .top: y = 0
+            case .bottom: y = height - newHeight
+            }
+            crop = CGRect(x: 0, y: y, width: width, height: newHeight)
         }
         guard let cropped = image.cropping(to: crop.integral) else { return nil }
 
