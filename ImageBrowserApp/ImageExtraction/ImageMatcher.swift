@@ -171,7 +171,7 @@ enum ImageMatcher {
         // UI backgrounds are drawn as exact colors; photo content, even a
         // plain wall, has noise and gradients well above this.
         let tolerance = 6
-        // "Mostly" one color (85% of the line), not entirely: a small UI
+        // "Mostly" one color (65% of the line), not entirely: a small UI
         // element overlapping the background beside a photo -- the floating
         // scroll-down button on Sakurazaka46 Message -- otherwise kept the
         // box growing past the photo's edge (seen on device: a 208pt-wide
@@ -186,7 +186,9 @@ enum ImageMatcher {
             let close = indices.filter { index in
                 (0..<3).allSatisfy { abs(Int(pixels[index * 4 + $0]) - reference[$0]) <= tolerance }
             }.count
-            return Double(close) >= Double(indices.count) * 0.85
+            // 65%: the floating button also overlapped a photo's corner,
+            // covering ~30% of the line beside it (seen on device).
+            return Double(close) >= Double(indices.count) * 0.65
         }
         func rowFlat(_ y: Int, _ x0: Int, _ x1: Int) -> Bool { isFlat((x0...x1).map { y * width + $0 }) }
         func columnFlat(_ x: Int, _ y0: Int, _ y1: Int) -> Bool { isFlat((y0...y1).map { $0 * width + x }) }

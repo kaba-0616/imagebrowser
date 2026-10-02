@@ -750,7 +750,11 @@ final class WebViewController: NSObject, ObservableObject {
         guard let rect = ImageMatcher.photoRect(in: cgImage, around: pixelPoint),
               let photo = cgImage.cropping(to: rect) else {
             AppLog.log("長押し画像の照合: 長押し位置の写真の枠を見つけられず切り出しで保存 (\(Int(point.x)), \(Int(point.y)))")
-            return LongPressLookup()
+            // Too little of the photo showing to count as one -- usually a
+            // photo mostly scrolled out under the header or off the bottom.
+            var lookup = LongPressLookup()
+            lookup.nearScreenEdge = point.y < screen.size.height * 0.15 || point.y > screen.size.height * 0.85
+            return lookup
         }
         let rectInPoints = "x\(Int(rect.minX / pixelsPerPoint)) y\(Int(rect.minY / pixelsPerPoint)) \(Int(rect.width / pixelsPerPoint))x\(Int(rect.height / pixelsPerPoint))pt"
         AppLog.log("長押し画像の照合: 写真の枠 \(rectInPoints)")
