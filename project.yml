@@ -113,9 +113,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagebrowser
         # 2026-09-27にApp Store公開済み(正式リリース)。以後はSemVerで通常通り刻む。
         # ビルド番号はMARKETING_VERSIONを上げるたびに1へ戻し、同じバージョン内では
-        # pushごとに+1する(1.0.1は旧方式で23〜を使用済みのため、1.0.2から適用)。
-        MARKETING_VERSION: "1.0.2"
-        CURRENT_PROJECT_VERSION: "15"
+        # pushごとに+1する(1.0.1は旧方式で23〜を使用済み)。1.0.2(仮番号、ビルド1〜15)で
+        # 新機能が入ったため、配信直前に1.1.0へ付け替えてビルド1から数え直した。
+        MARKETING_VERSION: "1.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:
