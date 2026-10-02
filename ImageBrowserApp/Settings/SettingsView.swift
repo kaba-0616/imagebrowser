@@ -65,6 +65,17 @@ struct SettingsView: View {
                     }
                 }
 
+                // TestFlight builds only -- never shown on App Store installs.
+                if StoreManager.isTestFlight {
+                    Section {
+                        Toggle("Proを一時的に無効にする", isOn: $store.ignoreProForTesting)
+                    } header: {
+                        Text("テスト用(TestFlight版のみ)")
+                    } footer: {
+                        Text("無料ユーザーの動作(広告・リワード広告など)を確認するための設定です。購入は取り消されません。")
+                    }
+                }
+
                 Section("サポート") {
                     Link("プライバシーポリシー", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!)
                     Link("サポート", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e815cb39acc3d6bc37793")!)

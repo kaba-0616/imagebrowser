@@ -21,6 +21,21 @@ final class StoreManager: ObservableObject {
 
     private var transactionListenerTask: Task<Void, Never>?
 
+    /// TestFlight installs carry a sandbox receipt; App Store installs don't.
+    static let isTestFlight = Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+
+    /// TestFlight only: behave as a free user even with a (sandbox) Pro
+    /// purchase, to try free-user flows such as the rewarded ad -- sandbox
+    /// lifetime purchases can't be undone. Ignored on App Store builds.
+    @Published var ignoreProForTesting = UserDefaults.standard.bool(forKey: "ignoreProForTesting") {
+        didSet {
+            UserDefaults.standard.set(ignoreProForTesting, forKey: "ignoreProForTesting")
+            Task { await refreshEntitlements() }
+        }
+    }
+
+    private var proSuppressed: Bool { Self.isTestFlight && ignoreProForTesting }
+
     init() {
         transactionListenerTask = Task { [weak self] in
             for await update in Transaction.updates {
@@ -72,12 +87,12 @@ final class StoreManager: ObservableObject {
                 found = true
             }
         }
-        isPro = found
+        isPro = found && !proSuppressed
     }
 
     private func handle(_ verification: VerificationResult<Transaction>) async {
         guard case .verified(let transaction) = verification else { return }
-        if ProProduct(rawValue: transaction.productID) != nil {
+        if ProProduct(rawValue: transaction.productID) != nil, !proSuppressed {
             isPro = true
         }
         await transaction.finish()
