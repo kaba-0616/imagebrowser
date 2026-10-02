@@ -43,7 +43,13 @@ final class WebViewController: NSObject, ObservableObject {
     /// See `gestureRecognizer(_:shouldReceive:)`.
     fileprivate var touchDownScreen: (image: UIImage, at: Date)?
     /// Hosts seen to be canvas-rendered (Flutter Web), shared by all tabs.
-    fileprivate static var canvasHosts: Set<String> = []
+    /// Remembered across launches: the first long press on a page is
+    /// otherwise the only moment a host gets recognized, so that press could
+    /// never use the touch-down snapshot (seen on device: the first press
+    /// matched nothing, every later one matched).
+    fileprivate static var canvasHosts: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "canvasHosts") ?? []) {
+        didSet { UserDefaults.standard.set(Array(canvasHosts), forKey: "canvasHosts") }
+    }
     /// Set by TabManager right after creating this controller. `window.open()`/
     /// `target="_blank"` (see `createWebViewWith` below) calls this instead of
     /// loading in place, so the new page becomes an ordinary tab -- matching
@@ -223,6 +229,7 @@ final class WebViewController: NSObject, ObservableObject {
         seenNetworkImages.removeAll()
         webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
         requestStorageScan()
+        prefetchTimelineIfNeeded()
     }
 
     func extractImages(withBackgrounds: Bool = true) async throws -> [PageImage] {
@@ -414,6 +421,38 @@ final class WebViewController: NSObject, ObservableObject {
         let unique = messages.filter { seen.insert($0.id).inserted }
         if !unique.isEmpty { timelineCache[groupID] = (Date(), unique) }
         return unique
+    }
+
+    private var timelinePrefetching: Set<String> = []
+
+    /// Opening a talk walks its whole timeline in the background, so the
+    /// first long press doesn't wait for it (seen on device: 5-9 seconds
+    /// for 15 pages, versus 0.5s once cached).
+    private func prefetchTimelineIfNeeded() {
+        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID,
+              !timelinePrefetching.contains(groupID) else { return }
+        if let cached = timelineCache[groupID], Date().timeIntervalSince(cached.at) < 600 { return }
+        timelinePrefetching.insert(groupID)
+        Task { [weak self] in
+            _ = await self?.fetchTimeline(groupID: groupID, origin: origin)
+            self?.timelinePrefetching.remove(groupID)
+        }
+    }
+
+    /// Flutter builds its view after the document itself has loaded, so
+    /// this checks a little later.
+    private func detectCanvasPageLater() {
+        Task { [weak self] in
+            for delay in [2, 5] as [UInt64] {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                guard let self, let host = self.webView.url?.host else { return }
+                if Self.canvasHosts.contains(host) { return }
+                if await ImageExtractionBridge.isCanvasRenderedPage(in: self.webView) {
+                    Self.canvasHosts.insert(host)
+                    return
+                }
+            }
+        }
     }
 
     /// `/organization/1/talk/timeline/58` -> `58`.
@@ -973,6 +1012,7 @@ extension WebViewController: WKNavigationDelegate {
         AppLog.log("読み込み完了: \(webView.url?.absoluteString ?? "?")")
         captureThumbnail()
         requestStorageScan()
+        detectCanvasPageLater()
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -1133,7 +1173,11 @@ extension WebViewController: WKScriptMessageHandler {
         default:
             if let url = URL(string: rawURL, relativeTo: webView.url)?.absoluteURL,
                let host = url.host, host.hasPrefix("api.message."), url.path.hasPrefix("/v2/") {
-                messageAPIOrigin = "\(url.scheme ?? "https")://\(host)"
+                let origin = "\(url.scheme ?? "https")://\(host)"
+                if messageAPIOrigin != origin {
+                    messageAPIOrigin = origin
+                    prefetchTimelineIfNeeded()
+                }
             }
             let status = body["status"] as? Int ?? 0
             let ctype = body["ctype"] as? String ?? ""
