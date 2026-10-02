@@ -81,8 +81,36 @@ final class BookmarkStore: ObservableObject {
         save()
     }
 
+    /// Adds at the top, or renames when the URL is already bookmarked.
+    func add(title: String, url: URL) {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let index = bookmarks.firstIndex(where: { $0.url == url }) {
+            bookmarks[index].title = name.isEmpty ? url.absoluteString : name
+        } else {
+            bookmarks.insert(Bookmark(title: name.isEmpty ? url.absoluteString : name, url: url), at: 0)
+        }
+        save()
+    }
+
+    func rename(_ id: UUID, to title: String) {
+        guard let index = bookmarks.firstIndex(where: { $0.id == id }) else { return }
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        bookmarks[index].title = name.isEmpty ? bookmarks[index].url.absoluteString : name
+        save()
+    }
+
     func remove(at offsets: IndexSet) {
         bookmarks.remove(atOffsets: offsets)
+        save()
+    }
+
+    func remove(_ id: UUID) {
+        bookmarks.removeAll { $0.id == id }
+        save()
+    }
+
+    func move(from source: IndexSet, to destination: Int) {
+        bookmarks.move(fromOffsets: source, toOffset: destination)
         save()
     }
 

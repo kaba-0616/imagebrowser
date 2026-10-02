@@ -601,7 +601,15 @@ final class WebViewController: NSObject, ObservableObject {
     /// caller then saves the screen crop as before.
     private func findOriginal(matching snapshot: UIImage) async -> PageImage? {
         let started = Date()
-        guard let cgImage = snapshot.normalizedOrientation().cgImage else { return nil }
+        AppLog.log("長押し画像の照合: 開始(画面切り出し\(Int(snapshot.size.width))x\(Int(snapshot.size.height))pt)")
+        // Always redrawn into a plain bitmap: takeSnapshot's UIImage isn't
+        // guaranteed to be CGImage-backed, and `.cgImage` on it came back nil
+        // on device -- the lookup then ended silently and every save fell
+        // back to the crop with no log line at all.
+        guard let cgImage = Self.bitmap(of: snapshot) else {
+            AppLog.log("長押し画像の照合: 画面切り出しを画像データに変換できず中止", isError: true)
+            return nil
+        }
         let candidates = await longPressCandidates()
         let ranked = await ImageMatcher.rank(snapshot: cgImage, candidates: candidates)
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
@@ -683,8 +691,17 @@ final class WebViewController: NSObject, ObservableObject {
             }
         }
         candidates += others.map { Self.candidate($0, rendered: nil) }
-        AppLog.debug("長押し画像の照合の候補: ページの読み込み履歴\(raw.count)件・メッセージ\(messageIDs.count)件(最新URL取得\(refreshed.count)件)・その他\(others.count)件")
+        AppLog.log("長押し画像の照合の候補: ページの読み込み履歴\(raw.count)件・メッセージ\(messageIDs.count)件(最新URL取得\(refreshed.count)件)・その他\(others.count)件")
         return candidates
+    }
+
+    private static func bitmap(of image: UIImage) -> CGImage? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = image.scale
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: image.size))
+        }.cgImage
     }
 
     private static func candidate(_ url: URL, rendered: URL?) -> PageImage {

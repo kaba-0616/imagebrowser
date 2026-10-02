@@ -62,6 +62,13 @@ private struct BrowserTabContentView: View {
     @State private var showPaywall = false
     @ObservedObject private var adConsent = AdConsent.shared
     @State private var extractionError: String?
+    @State private var bookmarkDraft: BookmarkDraft?
+
+    struct BookmarkDraft: Identifiable {
+        let id = UUID()
+        let title: String
+        let url: URL
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -122,6 +129,15 @@ private struct BrowserTabContentView: View {
                 store: store,
                 onClose: { showPaywall = false },
                 onWatchAd: adConsent.isReady ? { await watchAdForOneExtraction() } : nil
+            )
+        }
+        .sheet(item: $bookmarkDraft) { draft in
+            BookmarkNameSheet(
+                heading: "ブックマークを追加",
+                initialTitle: draft.title,
+                url: draft.url,
+                onSave: { bookmarkStore.add(title: $0, url: draft.url) },
+                onClose: { bookmarkDraft = nil }
             )
         }
         .alert("抽出に失敗しました", isPresented: Binding(
@@ -193,7 +209,13 @@ private struct BrowserTabContentView: View {
         Menu {
             Button {
                 guard let url = controller.webView.url else { return }
-                bookmarkStore.toggle(title: controller.pageTitle, url: url)
+                if currentPageIsBookmarked {
+                    bookmarkStore.toggle(title: controller.pageTitle, url: url)
+                } else {
+                    // Name it before saving -- page titles are often long or
+                    // generic ("Home", site-wide suffixes...).
+                    bookmarkDraft = BookmarkDraft(title: controller.pageTitle, url: url)
+                }
             } label: {
                 Label(
                     currentPageIsBookmarked ? "ブックマークを解除" : "このページをブックマーク",
