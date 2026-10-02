@@ -587,6 +587,7 @@ final class WebViewController: NSObject, ObservableObject {
                     await self?.findOriginal(matching: exact)
                 }
             } else {
+                AppLog.log("長押し画像の照合: 写真の枠を特定できないため照合せず切り出しで保存")
                 self.longPressOriginalLookup = nil
             }
             self.longPressLocation = point
@@ -601,13 +602,7 @@ final class WebViewController: NSObject, ObservableObject {
     private func findOriginal(matching snapshot: UIImage) async -> PageImage? {
         let started = Date()
         guard let cgImage = snapshot.normalizedOrientation().cgImage else { return nil }
-        let candidates: [PageImage]
-        do {
-            candidates = try await extractImages(withBackgrounds: false)
-        } catch {
-            AppLog.log("長押し画像の照合: 候補の取得に失敗 \(error.localizedDescription)", isError: true)
-            return nil
-        }
+        let candidates = await longPressCandidates()
         let ranked = await ImageMatcher.rank(snapshot: cgImage, candidates: candidates)
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         let top = ranked.prefix(3)
@@ -632,6 +627,71 @@ final class WebViewController: NSObject, ObservableObject {
     /// Mean grayscale difference below which two fingerprints count as the
     /// same picture (see ImageMatcher.Score.distance).
     private static let matchThreshold = 0.1
+
+    /// Every image the page has loaded since it opened (NetworkTap.js keeps
+    /// that list, unaffected by extraction draining the resource-timing
+    /// buffer). Using the bulk-extraction pipeline here instead left only 3
+    /// candidates right after a relaunch, none of them the pressed photo
+    /// (seen on device). Message photos get freshly signed URLs from the
+    /// site's API, since the page's own ones are often expired (403).
+    private func longPressCandidates() async -> [PageImage] {
+        let raw = (try? await webView.evaluateJavaScript(
+            "window.__ImageBrowserSeenImages ? window.__ImageBrowserSeenImages() : []")) as? [String] ?? []
+        let urls = Self.dropThumbnailsWithFullSize(raw.compactMap(URL.init(string:)))
+
+        // Newest first, so the cap keeps what was loaded most recently --
+        // most likely what's on screen.
+        var messageIDs: [String] = []
+        var urlsByID: [String: [URL]] = [:]
+        var others: [URL] = []
+        for url in urls.reversed() {
+            if let id = Self.messageID(of: url) {
+                if urlsByID[id] == nil { messageIDs.append(id) }
+                urlsByID[id, default: []].append(url)
+            } else {
+                others.append(url)
+            }
+        }
+        messageIDs = Array(messageIDs.prefix(150))
+
+        var refreshed: [String: RefreshedMessage] = [:]
+        if let origin = messageAPIOrigin, !messageIDs.isEmpty {
+            refreshed = await refreshMessageImages(ids: messageIDs, origin: origin)
+        }
+        let now = Date()
+        var candidates: [PageImage] = []
+        for id in messageIDs {
+            if let message = refreshed[id] {
+                if message.isVideo { continue }
+                let full = message.images.first { $0.path.contains("/files/") }
+                let thumb = message.images.first { $0.path.contains("/thumbnails/") }
+                if let main = full ?? thumb {
+                    candidates.append(Self.candidate(main, rendered: full == nil ? nil : thumb))
+                }
+                continue
+            }
+            // Not refreshed (no message API on this site, e.g. yodel): the
+            // page's own URLs, upgraded to full size where known.
+            for url in urlsByID[id] ?? [] where !Self.looksLikeVideoPoster(url) {
+                if url.path.contains("/thumbnails/"),
+                   let full = apiFullSizeByKey[Self.fullSizeKey(url)], !Self.isExpired(full, at: now) {
+                    candidates.append(Self.candidate(full, rendered: url))
+                } else {
+                    candidates.append(Self.candidate(url, rendered: nil))
+                }
+            }
+        }
+        candidates += others.map { Self.candidate($0, rendered: nil) }
+        AppLog.debug("長押し画像の照合の候補: ページの読み込み履歴\(raw.count)件・メッセージ\(messageIDs.count)件(最新URL取得\(refreshed.count)件)・その他\(others.count)件")
+        return candidates
+    }
+
+    private static func candidate(_ url: URL, rendered: URL?) -> PageImage {
+        PageImage(
+            id: 1_000_000 + Int(UInt(bitPattern: url.absoluteString.hashValue) % 1_000_000),
+            url: url, width: 0, height: 0, renderedURL: rendered, origin: "network"
+        )
+    }
 
     func dismissLongPressMenu() {
         longPressedImageURL = nil

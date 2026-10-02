@@ -241,6 +241,37 @@
         } catch (e) {}
     };
 
+    // 長押し保存の照合用: このページが開いてから読み込んだ画像URLを
+    // すべて憶えておく(パスごとに最新の1件)。一括抽出側の通信履歴は
+    // 読むたびに消化する(ImageCollector.jsのresourceTimingImages)ため、
+    // アプリを開き直した直後や画面を切り替えた直後に長押しすると候補が
+    // ほとんど残っていなかった(実機ログで候補3件、該当写真なし)。
+    // PerformanceObserverはバッファの消去や上限の影響を受けずに届く。
+    var seenImages = {};
+    var SEEN_IMAGE = /\.(?:jpe?g|png|gif|webp)(?:\?|#|$)/i;
+    var SEEN_SKIP = /\/favicon\.[a-z]+(\?|#|$)|\/icons\/Icon-(maskable-)?\d+\.png|\/(members|groups|users)\/(thumbnails|phone-images)\/|\/app_configs\/|\/splash\/img\//i;
+    try {
+        new PerformanceObserver(function (list) {
+            try {
+                var entries = list.getEntries();
+                for (var i = 0; i < entries.length; i++) {
+                    var url = entries[i].name;
+                    if (!SEEN_IMAGE.test(url) || SEEN_SKIP.test(url)) { continue; }
+                    var key = url.split("?")[0];
+                    delete seenImages[key];
+                    seenImages[key] = url;
+                }
+            } catch (e) {}
+        }).observe({ type: "resource", buffered: true });
+    } catch (e) {}
+    // 古い順。末尾ほど最近読み込まれたもの。
+    window.__ImageBrowserSeenImages = function () {
+        var keys = Object.keys(seenImages);
+        var out = [];
+        for (var i = Math.max(0, keys.length - 3000); i < keys.length; i++) { out.push(seenImages[keys[i]]); }
+        return out;
+    };
+
     var originalFetch = window.fetch;
     if (originalFetch) {
         window.fetch = function (input, init) {
