@@ -224,7 +224,7 @@ enum SaveError: LocalizedError {
     }
 }
 
-private extension UIImage {
+extension UIImage {
     /// Redraws into a fresh bitmap so PNG encoding can't get the orientation
     /// wrong. `WKWebView.takeSnapshot(with:)` (used for the Flutter-page
     /// long-press fallback, see WebViewController.captureCrop) can hand back

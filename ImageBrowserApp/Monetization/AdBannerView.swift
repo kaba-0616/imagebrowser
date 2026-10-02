@@ -22,11 +22,14 @@ struct AdBannerView: UIViewRepresentable {
 
 enum AdUnit {
     case bottom
+    case rewarded
 
-    /// imagebrowser用にAdMobコンソールで発行した実バナー広告ユニットID。
+    /// imagebrowser用にAdMobコンソールで発行した実広告ユニットID。
     var id: String {
         switch self {
         case .bottom: return "ca-app-pub-1034383442757151/9505213630"
+        // TODO: AdMobで発行したリワード広告ユニットIDに差し替える(現在はGoogle公式のテスト用ID)。
+        case .rewarded: return "ca-app-pub-3940256099942544/1712485313"
         }
     }
 }

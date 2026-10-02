@@ -35,6 +35,11 @@ final class WebViewController: NSObject, ObservableObject {
     /// cropped screen capture around the touch point, saved as-is since
     /// there's no original file to fetch.
     @Published private(set) var longPressedSnapshotImage: UIImage?
+    /// Started alongside `longPressedSnapshotImage`: looks for the actual
+    /// image file behind the snapshot (see `findOriginal`), so saving can
+    /// store the original instead of a screen crop. Kept past
+    /// `dismissLongPressMenu` -- the save button reads it, then dismisses.
+    private(set) var longPressOriginalLookup: Task<PageImage?, Never>?
     /// Set by TabManager right after creating this controller. `window.open()`/
     /// `target="_blank"` (see `createWebViewWith` below) calls this instead of
     /// loading in place, so the new page becomes an ordinary tab -- matching
@@ -574,10 +579,59 @@ final class WebViewController: NSObject, ObservableObject {
                 AppLog.log("スナップショット切り出しに失敗", isError: true)
                 return
             }
+            // Matching needs the widget's exact frame -- the fixed-size
+            // fallback square mixes in surrounding UI, which would only
+            // produce false matches.
+            if let region, let exact = await self.captureCrop(around: point, region: region, margin: 0) {
+                self.longPressOriginalLookup = Task { [weak self] in
+                    await self?.findOriginal(matching: exact)
+                }
+            } else {
+                self.longPressOriginalLookup = nil
+            }
             self.longPressLocation = point
             self.longPressedSnapshotImage = cropped
         }
     }
+
+    /// The page's image file that a long-pressed canvas region shows, found
+    /// by pixel comparison against everything the page has loaded (see
+    /// ImageMatcher). nil when nothing is clearly the same picture -- the
+    /// caller then saves the screen crop as before.
+    private func findOriginal(matching snapshot: UIImage) async -> PageImage? {
+        let started = Date()
+        guard let cgImage = snapshot.normalizedOrientation().cgImage else { return nil }
+        let candidates: [PageImage]
+        do {
+            candidates = try await extractImages(withBackgrounds: false)
+        } catch {
+            AppLog.log("長押し画像の照合: 候補の取得に失敗 \(error.localizedDescription)", isError: true)
+            return nil
+        }
+        let ranked = await ImageMatcher.rank(snapshot: cgImage, candidates: candidates)
+        let elapsed = Int(Date().timeIntervalSince(started) * 1000)
+        let top = ranked.prefix(3)
+            .map { "\(Self.shortPath($0.image.url))=\(String(format: "%.3f", $0.distance))" }
+            .joined(separator: ", ")
+        AppLog.log("長押し画像の照合: 候補\(candidates.count)件・比較できた\(ranked.count)件 \(elapsed)ms 上位: \(top.isEmpty ? "なし" : top)")
+
+        guard let best = ranked.first, best.distance < Self.matchThreshold else {
+            AppLog.log("長押し画像の照合: 一致する画像なし、切り出しで保存")
+            return nil
+        }
+        // Two near-identical candidates (e.g. the same photo posted twice
+        // with different crops) can't be told apart reliably.
+        if ranked.count > 1, ranked[1].distance < best.distance * 1.3, ranked[1].distance < Self.matchThreshold,
+           Self.fullSizeKey(ranked[1].image.url) != Self.fullSizeKey(best.image.url) {
+            AppLog.log("長押し画像の照合: 候補が拮抗しているため切り出しで保存")
+            return nil
+        }
+        return best.image
+    }
+
+    /// Mean grayscale difference below which two fingerprints count as the
+    /// same picture (see ImageMatcher.Score.distance).
+    private static let matchThreshold = 0.1
 
     func dismissLongPressMenu() {
         longPressedImageURL = nil
@@ -600,10 +654,9 @@ final class WebViewController: NSObject, ObservableObject {
     /// margin is added since that rect is exact and touch points land a few
     /// pixels inside an edge often enough that a literal 1:1 crop feels
     /// clipped.
-    private func captureCrop(around point: CGPoint, region: CGRect?, fallbackSide: CGFloat = 320) async -> UIImage? {
+    private func captureCrop(around point: CGPoint, region: CGRect?, margin: CGFloat = 12, fallbackSide: CGFloat = 320) async -> UIImage? {
         let config = WKSnapshotConfiguration()
         if let region {
-            let margin: CGFloat = 12
             config.rect = region.insetBy(dx: -margin, dy: -margin)
         } else {
             let half = fallbackSide / 2

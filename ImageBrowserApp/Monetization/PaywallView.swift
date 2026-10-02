@@ -7,9 +7,14 @@ import StoreKit
 struct PaywallView: View {
     @ObservedObject var store: StoreManager
     let onClose: () -> Void
+    /// "Watch an ad for one extraction". nil hides the option (opened from
+    /// Settings, or the ad SDK isn't started yet).
+    var onWatchAd: (() async -> RewardedAdManager.Outcome)? = nil
 
     @State private var purchasing: String?
     @State private var errorMessage: String?
+    @State private var watchingAd = false
+    @ObservedObject private var rewardedAd = RewardedAdManager.shared
 
     var body: some View {
         NavigationView {
@@ -47,6 +52,35 @@ struct PaywallView: View {
                         }
                     }
 
+                    if let onWatchAd {
+                        Button {
+                            Task {
+                                watchingAd = true
+                                errorMessage = nil
+                                let outcome = await onWatchAd()
+                                watchingAd = false
+                                switch outcome {
+                                case .earned: break
+                                case .notEarned: errorMessage = "広告を最後まで見ると1回使えます。"
+                                case .unavailable: errorMessage = "広告を読み込めませんでした。時間をおいて再度お試しください。"
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "play.rectangle")
+                                Text("広告を見て1回だけ使う")
+                                    .font(.headline)
+                                Spacer()
+                                if watchingAd || rewardedAd.isLoading {
+                                    ProgressView()
+                                }
+                            }
+                            .padding()
+                            .background(RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor))
+                        }
+                        .disabled(purchasing != nil || watchingAd)
+                    }
+
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.footnote)
@@ -75,6 +109,9 @@ struct PaywallView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .task {
+            if onWatchAd != nil { await rewardedAd.preload() }
+        }
         .onChange(of: store.isPro) { isPro in
             if isPro { onClose() }
         }

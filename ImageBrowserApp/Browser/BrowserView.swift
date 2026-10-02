@@ -80,7 +80,7 @@ private struct BrowserTabContentView: View {
                                     if let url = controller.longPressedImageURL {
                                         saveSingle(url)
                                     } else if let snapshot = controller.longPressedSnapshotImage {
-                                        Task { await longPressSaver.saveRaw(snapshot) }
+                                        saveSnapshotOrOriginal(snapshot, lookup: controller.longPressOriginalLookup)
                                     }
                                     controller.dismissLongPressMenu()
                                 },
@@ -118,7 +118,11 @@ private struct BrowserTabContentView: View {
             }
         }
         .sheet(isPresented: $showPaywall) {
-            PaywallView(store: store) { showPaywall = false }
+            PaywallView(
+                store: store,
+                onClose: { showPaywall = false },
+                onWatchAd: adConsent.isReady ? { await watchAdForOneExtraction() } : nil
+            )
         }
         .alert("抽出に失敗しました", isPresented: Binding(
             get: { extractionError != nil },
@@ -259,6 +263,20 @@ private struct BrowserTabContentView: View {
         Task { await extractImages() }
     }
 
+    /// Free users: one rewarded ad buys exactly one extraction run. Nothing
+    /// is stored -- the next extraction asks again.
+    private func watchAdForOneExtraction() async -> RewardedAdManager.Outcome {
+        let outcome = await RewardedAdManager.shared.show()
+        AppLog.log("リワード広告の結果: \(outcome)")
+        guard outcome == .earned else { return outcome }
+        showPaywall = false
+        // The grid is another sheet; it can't open until the paywall's
+        // dismiss animation has finished.
+        try? await Task.sleep(nanoseconds: 700_000_000)
+        await extractImages()
+        return outcome
+    }
+
     private func extractImages() async {
         isExtracting = true
         defer { isExtracting = false }
@@ -278,6 +296,20 @@ private struct BrowserTabContentView: View {
         return {
             UIPasteboard.general.string = url.absoluteString
             controller.dismissLongPressMenu()
+        }
+    }
+
+    /// Canvas-page long press: saves the original file when the pixel match
+    /// found one (see WebViewController.findOriginal), else the screen crop.
+    private func saveSnapshotOrOriginal(_ snapshot: UIImage, lookup: Task<PageImage?, Never>?) {
+        Task {
+            if let original = await lookup?.value {
+                AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")
+                await longPressSaver.save([original])
+                if case .finished(let succeeded, _, _) = longPressSaver.state, succeeded > 0 { return }
+                AppLog.log("長押し: 原寸画像の保存に失敗したため切り出しで保存", isError: true)
+            }
+            await longPressSaver.saveRaw(snapshot)
         }
     }
 
