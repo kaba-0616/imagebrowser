@@ -63,6 +63,7 @@ private struct BrowserTabContentView: View {
     @ObservedObject private var adConsent = AdConsent.shared
     @State private var extractionError: String?
     @State private var bookmarkDraft: BookmarkDraft?
+    @State private var longPressNotice: String?
 
     struct BookmarkDraft: Identifiable {
         let id = UUID()
@@ -73,6 +74,16 @@ private struct BrowserTabContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             addressBar
+                // On a different view than the extraction-error alert below:
+                // two .alert modifiers on the same view can't both present.
+                .alert("保存できませんでした", isPresented: Binding(
+                    get: { longPressNotice != nil },
+                    set: { if !$0 { longPressNotice = nil } }
+                )) {
+                    Button("OK") { longPressNotice = nil }
+                } message: {
+                    Text(longPressNotice ?? "")
+                }
             progressBar
             WebViewRepresentable(webView: controller.webView)
                 .overlay(alignment: .topLeading) {
@@ -86,8 +97,8 @@ private struct BrowserTabContentView: View {
                                 onSave: {
                                     if let url = controller.longPressedImageURL {
                                         saveSingle(url)
-                                    } else if let snapshot = controller.longPressedSnapshotImage {
-                                        saveSnapshotOrOriginal(snapshot, lookup: controller.longPressOriginalLookup)
+                                    } else if controller.longPressedSnapshotImage != nil {
+                                        saveOriginalIfFound(lookup: controller.longPressOriginalLookup)
                                     }
                                     controller.dismissLongPressMenu()
                                 },
@@ -322,17 +333,21 @@ private struct BrowserTabContentView: View {
     }
 
     /// Canvas-page long press: saves the original file when the pixel match
-    /// found one (see WebViewController.findOriginal), else the screen crop.
-    private func saveSnapshotOrOriginal(_ snapshot: UIImage, lookup: Task<WebViewController.LongPressLookup, Never>?) {
+    /// found one (see WebViewController.findOriginal). A screen crop is
+    /// never saved -- the user only wants originals, so when none is found
+    /// it says so instead.
+    private func saveOriginalIfFound(lookup: Task<WebViewController.LongPressLookup, Never>?) {
         Task {
-            let found = await lookup?.value
-            if let original = found?.original {
-                AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")
-                await longPressSaver.save([original])
-                if case .finished(let succeeded, _, _) = longPressSaver.state, succeeded > 0 { return }
-                AppLog.log("長押し: 原寸画像の保存に失敗したため切り出しで保存", isError: true)
+            guard let original = await lookup?.value.original else {
+                AppLog.log("長押し: 原寸画像を特定できなかったため保存せず")
+                longPressNotice = "この写真の元の画像を特定できなかったため、保存しませんでした。"
+                return
             }
-            await longPressSaver.saveRaw(found?.photoCrop ?? snapshot)
+            AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")
+            await longPressSaver.save([original])
+            if case .finished(let succeeded, _, let message) = longPressSaver.state, succeeded == 0 {
+                longPressNotice = "保存に失敗しました。\(message ?? "")"
+            }
         }
     }
 

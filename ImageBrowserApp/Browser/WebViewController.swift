@@ -650,7 +650,11 @@ final class WebViewController: NSObject, ObservableObject {
             // accessibility region above turned out to be the entire screen
             // on Sakurazaka46 Message (both in the timeline and the viewer).
             AppLog.log("長押し画像の照合: 画面の撮影 \(early != nil ? "指が触れた時点" : "長押し判定後(サイトのメニューが写り込む可能性あり)")")
-            if let screen = early ?? (await self.captureCrop(around: point, region: self.webView.bounds, margin: 0)) {
+            var screen = early
+            if screen == nil {
+                screen = await self.captureCrop(around: point, region: self.webView.bounds, margin: 0)
+            }
+            if let screen {
                 self.longPressOriginalLookup = Task { [weak self] in
                     await self?.findOriginal(onScreen: screen, at: point) ?? LongPressLookup()
                 }
