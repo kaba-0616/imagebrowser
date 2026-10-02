@@ -114,6 +114,79 @@ enum ImageMatcher {
         return values.map { $0 - mean }
     }
 
+    /// The on-screen frame of the photo under `point` (both in the image's
+    /// pixel coordinates), found from the pixels alone: a box is grown out
+    /// from the touch point one line at a time, and a side stops growing
+    /// once the line just beyond it is a single flat color -- the light-gray
+    /// message bubble around a timeline photo, or the black letterbox of the
+    /// full-screen viewer (Sakurazaka46 Message, seen in screenshots). The
+    /// page's accessibility tree only ever reported the whole screen, so it
+    /// can't be used for this. nil when the result is too small to be a
+    /// photo (e.g. the press landed on text or a flat area).
+    static func photoRect(in image: CGImage, around point: CGPoint) -> CGRect? {
+        let scale = min(1, 300 / CGFloat(image.width))
+        let width = max(1, Int(CGFloat(image.width) * scale))
+        let height = max(1, Int(CGFloat(image.height) * scale))
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return nil }
+
+        // Flat = every channel varies by at most this much along the line.
+        // UI backgrounds are drawn as exact colors; photo content, even a
+        // plain wall, has noise and gradients well above this.
+        let tolerance = 6
+        func isFlat(_ indices: [Int]) -> Bool {
+            var low = [255, 255, 255], high = [0, 0, 0]
+            for index in indices {
+                for channel in 0..<3 {
+                    let value = Int(pixels[index * 4 + channel])
+                    low[channel] = min(low[channel], value)
+                    high[channel] = max(high[channel], value)
+                }
+            }
+            return (0..<3).allSatisfy { high[$0] - low[$0] <= tolerance }
+        }
+        func rowFlat(_ y: Int, _ x0: Int, _ x1: Int) -> Bool { isFlat((x0...x1).map { y * width + $0 }) }
+        func columnFlat(_ x: Int, _ y0: Int, _ y1: Int) -> Bool { isFlat((y0...y1).map { $0 * width + x }) }
+
+        let px = min(max(Int(point.x * scale), 0), width - 1)
+        let py = min(max(Int(point.y * scale), 0), height - 1)
+        // Seeded with a box of a few dozen pixels, not a single point: a
+        // short line inside a smooth part of a photo (skin, sky) can easily
+        // look flat and would stop the growth right away. If the seed pokes
+        // out past the photo's edge, that strip of background is trimmed
+        // again later (trimUniformBorders in rank).
+        let seed = max(width / 16, 2)
+        var left = max(px - seed, 0), right = min(px + seed, width - 1)
+        var top = max(py - seed, 0), bottom = min(py + seed, height - 1)
+        var grew = true
+        while grew {
+            grew = false
+            if top > 0, !rowFlat(top - 1, left, right) { top -= 1; grew = true }
+            if bottom < height - 1, !rowFlat(bottom + 1, left, right) { bottom += 1; grew = true }
+            if left > 0, !columnFlat(left - 1, top, bottom) { left -= 1; grew = true }
+            if right < width - 1, !columnFlat(right + 1, top, bottom) { right += 1; grew = true }
+        }
+
+        // Smaller than a fifth of the screen width either way: text, an
+        // icon or a flat patch, not a photo.
+        let minimum = width / 5
+        guard right - left + 1 >= minimum, bottom - top + 1 >= minimum else { return nil }
+        return CGRect(
+            x: CGFloat(left) / scale, y: CGFloat(top) / scale,
+            width: CGFloat(right - left + 1) / scale, height: CGFloat(bottom - top + 1) / scale
+        ).integral.intersection(CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    }
+
     /// Cuts off flat, single-color bands along each edge -- the black/white
     /// letterbox a full-screen viewer puts around a photo whose shape
     /// doesn't match the screen. Measured on a small grayscale copy; a band

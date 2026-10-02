@@ -323,15 +323,16 @@ private struct BrowserTabContentView: View {
 
     /// Canvas-page long press: saves the original file when the pixel match
     /// found one (see WebViewController.findOriginal), else the screen crop.
-    private func saveSnapshotOrOriginal(_ snapshot: UIImage, lookup: Task<PageImage?, Never>?) {
+    private func saveSnapshotOrOriginal(_ snapshot: UIImage, lookup: Task<WebViewController.LongPressLookup, Never>?) {
         Task {
-            if let original = await lookup?.value {
+            let found = await lookup?.value
+            if let original = found?.original {
                 AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")
                 await longPressSaver.save([original])
                 if case .finished(let succeeded, _, _) = longPressSaver.state, succeeded > 0 { return }
                 AppLog.log("長押し: 原寸画像の保存に失敗したため切り出しで保存", isError: true)
             }
-            await longPressSaver.saveRaw(snapshot)
+            await longPressSaver.saveRaw(found?.photoCrop ?? snapshot)
         }
     }
 

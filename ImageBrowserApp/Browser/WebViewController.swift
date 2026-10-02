@@ -39,7 +39,11 @@ final class WebViewController: NSObject, ObservableObject {
     /// image file behind the snapshot (see `findOriginal`), so saving can
     /// store the original instead of a screen crop. Kept past
     /// `dismissLongPressMenu` -- the save button reads it, then dismisses.
-    private(set) var longPressOriginalLookup: Task<PageImage?, Never>?
+    private(set) var longPressOriginalLookup: Task<LongPressLookup, Never>?
+    /// See `gestureRecognizer(_:shouldReceive:)`.
+    fileprivate var touchDownScreen: (image: UIImage, at: Date)?
+    /// Hosts seen to be canvas-rendered (Flutter Web), shared by all tabs.
+    fileprivate static var canvasHosts: Set<String> = []
     /// Set by TabManager right after creating this controller. `window.open()`/
     /// `target="_blank"` (see `createWebViewWith` below) calls this instead of
     /// loading in place, so the new page becomes an ordinary tab -- matching
@@ -364,6 +368,60 @@ final class WebViewController: NSObject, ObservableObject {
     /// below knows how to call.
     private var messageAPIOrigin: String?
     private var pendingRefresh: [String: CheckedContinuation<[String: RefreshedMessage], Never>] = [:]
+    private var pendingTimeline: [String: CheckedContinuation<[TimelineMessage], Never>] = [:]
+    /// Per talk group, so repeated long presses don't re-walk the whole
+    /// timeline. Kept 10 minutes -- the signed URLs inside expire.
+    private var timelineCache: [String: (at: Date, messages: [TimelineMessage])] = [:]
+
+    struct TimelineMessage {
+        let id: String
+        let type: String
+        let file: URL?
+        let thumbnail: URL?
+        /// The thumbnail's pixel size, when the API reports it.
+        let width: Int
+        let height: Int
+
+        var isVideo: Bool {
+            let lower = type.lowercased()
+            let ext = file?.pathExtension.lowercased() ?? ""
+            return lower.contains("video") || lower.contains("movie")
+                || ["mp4", "mov", "m4v", "m3u8", "webm"].contains(ext)
+        }
+    }
+
+    /// The whole timeline of one talk group, walked from the start via the
+    /// site's own timeline API (see NetworkTap.js).
+    private func fetchTimeline(groupID: String, origin: String) async -> [TimelineMessage] {
+        if let cached = timelineCache[groupID], Date().timeIntervalSince(cached.at) < 600 {
+            return cached.messages
+        }
+        let requestID = UUID().uuidString
+        let messages: [TimelineMessage] = await withCheckedContinuation { continuation in
+            pendingTimeline[requestID] = continuation
+            let script = "window.__ImageBrowserFetchTimeline && window.__ImageBrowserFetchTimeline('\(requestID)', '\(origin)', '\(groupID)'); true"
+            webView.evaluateJavaScript(script, completionHandler: nil)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                if let pending = self?.pendingTimeline.removeValue(forKey: requestID) {
+                    AppLog.log("タイムラインAPIの取得がタイムアウト(20秒)", isError: true)
+                    pending.resume(returning: [])
+                }
+            }
+        }
+        // Later pages overlap the previous one at the boundary.
+        var seen = Set<String>()
+        let unique = messages.filter { seen.insert($0.id).inserted }
+        if !unique.isEmpty { timelineCache[groupID] = (Date(), unique) }
+        return unique
+    }
+
+    /// `/organization/1/talk/timeline/58` -> `58`.
+    private var currentTalkGroupID: String? {
+        guard let path = webView.url?.path,
+              let range = path.range(of: #"/timeline/(\d+)"#, options: .regularExpression) else { return nil }
+        return path[range].split(separator: "/").last.map(String.init)
+    }
 
     struct RefreshedMessage {
         let images: [URL]
@@ -399,10 +457,12 @@ final class WebViewController: NSObject, ObservableObject {
             pendingRefresh[requestID] = continuation
             let script = "window.__ImageBrowserRefreshMessageImages && window.__ImageBrowserRefreshMessageImages('\(requestID)', '\(origin)', \(idsJSON)); true"
             webView.evaluateJavaScript(script, completionHandler: nil)
+            // 4 requests at a time: allow ~0.5s per round on top of 10s.
+            let seconds = 10 + UInt64(ids.count / 4) / 2
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
                 if let pending = self?.pendingRefresh.removeValue(forKey: requestID) {
-                    AppLog.log("メッセージAPIでの最新URL再取得がタイムアウト(10秒)", isError: true)
+                    AppLog.log("メッセージAPIでの最新URL再取得がタイムアウト(\(seconds)秒)", isError: true)
                     pending.resume(returning: [:])
                 }
             }
@@ -573,21 +633,29 @@ final class WebViewController: NSObject, ObservableObject {
             }
             AppLog.log("長押し位置に画像なし、Canvas描画ページのためスナップショット切り出しにフォールバック (\(Int(point.x)), \(Int(point.y)))")
             guard let self else { return }
+            if let host = webView.url?.host { Self.canvasHosts.insert(host) }
+            // Taken at touch-down when this host was already known to be a
+            // canvas page (see shouldReceive touch); otherwise right now,
+            // which may already include the site's own long-press overlay.
+            let early = self.touchDownScreen.flatMap { Date().timeIntervalSince($0.at) < 3 ? $0.image : nil }
+            self.touchDownScreen = nil
             let region = await ImageExtractionBridge.canvasRegion(in: webView, at: point)
             AppLog.debug("切り出し範囲: \(region.map { "\($0)" } ?? "取得できず、固定サイズにフォールバック")")
             guard let cropped = await self.captureCrop(around: point, region: region) else {
                 AppLog.log("スナップショット切り出しに失敗", isError: true)
                 return
             }
-            // Matching needs the widget's exact frame -- the fixed-size
-            // fallback square mixes in surrounding UI, which would only
-            // produce false matches.
-            if let region, let exact = await self.captureCrop(around: point, region: region, margin: 0) {
+            // The whole visible page, unmargined: the photo's frame is found
+            // from the pixels themselves (see ImageMatcher.photoRect). The
+            // accessibility region above turned out to be the entire screen
+            // on Sakurazaka46 Message (both in the timeline and the viewer).
+            AppLog.log("長押し画像の照合: 画面の撮影 \(early != nil ? "指が触れた時点" : "長押し判定後(サイトのメニューが写り込む可能性あり)")")
+            if let screen = early ?? (await self.captureCrop(around: point, region: self.webView.bounds, margin: 0)) {
                 self.longPressOriginalLookup = Task { [weak self] in
-                    await self?.findOriginal(matching: exact)
+                    await self?.findOriginal(onScreen: screen, at: point) ?? LongPressLookup()
                 }
             } else {
-                AppLog.log("長押し画像の照合: 写真の枠を特定できないため照合せず切り出しで保存")
+                AppLog.log("長押し画像の照合: 画面全体のスナップショットを取れず照合せず切り出しで保存", isError: true)
                 self.longPressOriginalLookup = nil
             }
             self.longPressLocation = point
@@ -599,43 +667,107 @@ final class WebViewController: NSObject, ObservableObject {
     /// by pixel comparison against everything the page has loaded (see
     /// ImageMatcher). nil when nothing is clearly the same picture -- the
     /// caller then saves the screen crop as before.
-    private func findOriginal(matching snapshot: UIImage) async -> PageImage? {
+    struct LongPressLookup {
+        /// The page's original file for the pressed photo, when found.
+        var original: PageImage?
+        /// Just the photo's own pixels on screen -- a far better fallback
+        /// than the whole-screen crop when no original matched.
+        var photoCrop: UIImage?
+    }
+
+    private func findOriginal(onScreen screen: UIImage, at point: CGPoint) async -> LongPressLookup {
         let started = Date()
-        AppLog.log("長押し画像の照合: 開始(画面切り出し\(Int(snapshot.size.width))x\(Int(snapshot.size.height))pt)")
         // Always redrawn into a plain bitmap: takeSnapshot's UIImage isn't
         // guaranteed to be CGImage-backed, and `.cgImage` on it came back nil
         // on device -- the lookup then ended silently and every save fell
         // back to the crop with no log line at all.
-        guard let cgImage = Self.bitmap(of: snapshot) else {
-            AppLog.log("長押し画像の照合: 画面切り出しを画像データに変換できず中止", isError: true)
-            return nil
+        guard let cgImage = Self.bitmap(of: screen), screen.size.width > 0 else {
+            AppLog.log("長押し画像の照合: 画面を画像データに変換できず中止", isError: true)
+            return LongPressLookup()
         }
-        let candidates = await longPressCandidates()
-        let ranked = await ImageMatcher.rank(snapshot: cgImage, candidates: candidates)
+        let pixelsPerPoint = CGFloat(cgImage.width) / screen.size.width
+        let pixelPoint = CGPoint(x: point.x * pixelsPerPoint, y: point.y * pixelsPerPoint)
+        guard let rect = ImageMatcher.photoRect(in: cgImage, around: pixelPoint),
+              let photo = cgImage.cropping(to: rect) else {
+            AppLog.log("長押し画像の照合: 長押し位置の写真の枠を見つけられず切り出しで保存 (\(Int(point.x)), \(Int(point.y)))")
+            return LongPressLookup()
+        }
+        let rectInPoints = "x\(Int(rect.minX / pixelsPerPoint)) y\(Int(rect.minY / pixelsPerPoint)) \(Int(rect.width / pixelsPerPoint))x\(Int(rect.height / pixelsPerPoint))pt"
+        AppLog.log("長押し画像の照合: 写真の枠 \(rectInPoints)")
+        var result = LongPressLookup(original: nil, photoCrop: UIImage(cgImage: photo))
+
+        let trimmed = ImageMatcher.trimUniformBorders(photo)
+        let aspect = CGFloat(trimmed.width) / CGFloat(max(trimmed.height, 1))
+        var candidates = await timelineCandidates(photoAspect: aspect) ?? []
+        if candidates.isEmpty {
+            candidates = await longPressCandidates()
+        }
+        let ranked = await ImageMatcher.rank(snapshot: photo, candidates: candidates)
         let elapsed = Int(Date().timeIntervalSince(started) * 1000)
         let top = ranked.prefix(3)
             .map { "\(Self.shortPath($0.image.url))=\(String(format: "%.3f", $0.distance))" }
             .joined(separator: ", ")
-        let trimmed = ImageMatcher.trimUniformBorders(cgImage)
-        AppLog.log("長押し画像の照合: 候補\(candidates.count)件・比較できた\(ranked.count)件 \(elapsed)ms 画面切り出し\(cgImage.width)x\(cgImage.height)→余白除去後\(trimmed.width)x\(trimmed.height) 上位: \(top.isEmpty ? "なし" : top)")
+        AppLog.log("長押し画像の照合: 候補\(candidates.count)件・比較できた\(ranked.count)件 \(elapsed)ms 上位: \(top.isEmpty ? "なし" : top)")
 
         guard let best = ranked.first, best.distance < Self.matchThreshold else {
-            AppLog.log("長押し画像の照合: 一致する画像なし、切り出しで保存")
-            return nil
+            AppLog.log("長押し画像の照合: 一致する画像なし、写真の枠の切り出しで保存")
+            return result
         }
         // Two near-identical candidates (e.g. the same photo posted twice
         // with different crops) can't be told apart reliably.
         if ranked.count > 1, ranked[1].distance < best.distance * 1.3, ranked[1].distance < Self.matchThreshold,
            Self.fullSizeKey(ranked[1].image.url) != Self.fullSizeKey(best.image.url) {
-            AppLog.log("長押し画像の照合: 候補が拮抗しているため切り出しで保存")
-            return nil
+            AppLog.log("長押し画像の照合: 候補が拮抗しているため写真の枠の切り出しで保存")
+            return result
         }
-        return best.image
+        result.original = best.image
+        return result
     }
 
     /// Mean grayscale difference below which two fingerprints count as the
     /// same picture (see ImageMatcher.Score.distance).
     private static let matchThreshold = 0.1
+
+    /// Photo messages of the talk being viewed, from the site's timeline API.
+    /// Narrowed by shape when the API reports thumbnail sizes: the photo is
+    /// shown whole both in the timeline and in the viewer, so its on-screen
+    /// aspect ratio matches its thumbnail's. nil when this isn't a message
+    /// site's talk page.
+    private func timelineCandidates(photoAspect: CGFloat) async -> [PageImage]? {
+        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return nil }
+        let messages = await fetchTimeline(groupID: groupID, origin: origin)
+        let media = messages.filter { !$0.isVideo && ($0.file != nil || $0.thumbnail != nil) }
+        let withShape = media.filter { $0.width > 0 && $0.height > 0 }
+        let sameShape = withShape.filter {
+            abs(CGFloat($0.width) / CGFloat($0.height) - photoAspect) / photoAspect < 0.06
+        }
+        // Newest first (the API returns oldest first), capped so a member
+        // with years of photos doesn't mean hundreds of downloads.
+        let pool = Array((sameShape.isEmpty ? media : sameShape).reversed().prefix(300))
+        AppLog.log("長押し画像の照合: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(media.count)件(サイズ情報あり\(withShape.count)件・縦横比が一致\(sameShape.count)件、画面上の縦横比\(String(format: "%.3f", photoAspect))) → 候補\(pool.count)件")
+        if !pool.isEmpty {
+            return pool.compactMap { message in
+                guard let main = message.file ?? message.thumbnail else { return nil }
+                return Self.candidate(main, rendered: message.file == nil ? nil : message.thumbnail)
+            }
+        }
+
+        // The timeline listed messages but no image URLs: ask for each
+        // non-text message individually (newest first, capped).
+        let ids = messages.reversed()
+            .filter { !$0.isVideo && $0.type.lowercased() != "text" }
+            .prefix(150).map(\.id)
+        guard !ids.isEmpty else { return [] }
+        let refreshed = await refreshMessageImages(ids: Array(ids), origin: origin)
+        AppLog.log("長押し画像の照合: タイムラインに画像URLが無いためメッセージ\(ids.count)件を個別取得 → \(refreshed.count)件")
+        return ids.compactMap { id in
+            guard let message = refreshed[id], !message.isVideo else { return nil }
+            let full = message.images.first { $0.path.contains("/files/") }
+            let thumb = message.images.first { $0.path.contains("/thumbnails/") }
+            guard let main = full ?? thumb else { return nil }
+            return Self.candidate(main, rendered: full == nil ? nil : thumb)
+        }
+    }
 
     /// Every image the page has loaded since it opened (NetworkTap.js keeps
     /// that list, unaffected by extraction draining the resource-timing
@@ -927,6 +1059,25 @@ extension WebViewController: WKScriptMessageHandler {
             : "画像URLなし"
 
         switch kind {
+        case "timeline":
+            guard let requestID = body["requestID"] as? String,
+                  let continuation = pendingTimeline.removeValue(forKey: requestID) else { return }
+            let messages = (body["messages"] as? [[String: Any]] ?? []).map { item in
+                TimelineMessage(
+                    id: item["id"] as? String ?? "",
+                    type: item["type"] as? String ?? "",
+                    file: (item["file"] as? String).flatMap(URL.init(string:)),
+                    thumbnail: (item["thumbnail"] as? String).flatMap(URL.init(string:)),
+                    width: item["width"] as? Int ?? 0,
+                    height: item["height"] as? Int ?? 0
+                )
+            }
+            let keys = (body["keys"] as? [String] ?? []).sorted().joined(separator: ",")
+            let error = body["error"] as? String ?? ""
+            AppLog.log("タイムラインAPIの取得: HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")",
+                       isError: !error.isEmpty)
+            continuation.resume(returning: messages)
+            return
         case "refresh":
             guard let requestID = body["requestID"] as? String,
                   let continuation = pendingRefresh.removeValue(forKey: requestID) else { return }
@@ -1022,6 +1173,23 @@ final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
 }
 
 extension WebViewController: UIGestureRecognizerDelegate {
+    /// Touch-down on a page already known to be canvas-rendered: grabs the
+    /// screen right away, before the site's own long-press handling reacts.
+    /// Sakurazaka46 Message opens its own menu (favorite/reply) and dims the
+    /// whole page on long press, at about the same moment ours fires -- a
+    /// snapshot taken after that shows a darkened photo with a menu on top.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if let host = webView.url?.host, Self.canvasHosts.contains(host) {
+            let config = WKSnapshotConfiguration()
+            config.rect = webView.bounds
+            webView.takeSnapshot(with: config) { [weak self] image, _ in
+                guard let image else { return }
+                self?.touchDownScreen = (image, Date())
+            }
+        }
+        return true
+    }
+
     func gestureRecognizer(
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer

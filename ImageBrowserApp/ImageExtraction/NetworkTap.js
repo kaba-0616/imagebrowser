@@ -361,6 +361,57 @@
         if (!originalFetch || !ids || !ids.length) { finish(); return; }
         next();
     };
+    // 長押し保存の照合用: トーク(グループ)のメッセージ一覧を、ページと同じ
+    // タイムラインAPI(/v2/groups/<番号>/timeline)で最初から全部たどって
+    // アプリ本体へ返す(kind: "timeline")。ページ自身は前回からの差分しか
+    // 取らず、写真もほぼ端末内のキャッシュから描くため、読み込み記録からは
+    // 画面に出ている写真の候補がほとんど集まらなかった(実機ログで3件)。
+    // ページが付けているclear_unread(既読にする指定)は付けない。
+    // 1回200件、最大30回まで。メッセージ本文は返さない。
+    window.__ImageBrowserFetchTimeline = function (requestID, apiOrigin, groupID) {
+        var headers = authHeadersByOrigin[apiOrigin] || {};
+        var messages = [];
+        var keys = {};
+        var pages = 0, status = 0;
+        function finish(error) {
+            post({
+                kind: "timeline", requestID: requestID, messages: messages, pages: pages,
+                status: status, keys: Object.keys(keys), error: error || ""
+            });
+        }
+        function text(v) { return v === undefined || v === null ? "" : String(v); }
+        function page(from) {
+            var url = apiOrigin + "/v2/groups/" + encodeURIComponent(groupID)
+                + "/timeline?updated_from=" + encodeURIComponent(from) + "&count=200&order=asc";
+            originalFetch.call(window, url, { headers: headers, credentials: "include" })
+                .then(function (res) {
+                    status = res.status;
+                    return res.status === 200 ? res.json() : null;
+                })
+                .then(function (json) {
+                    pages++;
+                    var list = (json && json.messages) || [];
+                    for (var i = 0; i < list.length; i++) {
+                        var m = list[i] || {};
+                        for (var k in m) { keys[k] = 1; }
+                        messages.push({
+                            id: text(m.id), type: text(m.type), file: text(m.file), thumbnail: text(m.thumbnail),
+                            width: m.thumbnail_width | 0, height: m.thumbnail_height | 0,
+                            at: text(m.published_at)
+                        });
+                    }
+                    if (list.length >= 200 && pages < 30) {
+                        var last = list[list.length - 1] || {};
+                        var next = text(last.updated_at || last.published_at);
+                        if (next && next !== from) { page(next); return; }
+                    }
+                    finish();
+                }, function (e) { finish(String(e)); });
+        }
+        if (!originalFetch) { finish("fetch unavailable"); return; }
+        page("2000-01-01T00:00:00Z");
+    };
+
     XMLHttpRequest.prototype.send = function () {
         var xhr = this;
         try {
