@@ -342,13 +342,19 @@ private struct BrowserTabContentView: View {
     /// it says so instead.
     private func saveOriginalIfFound(lookup: Task<WebViewController.LongPressLookup, Never>?, at point: CGPoint) {
         Task {
-            var found = await lookup?.value.original
+            let first = await lookup?.value
+            var found = first?.original
+            var nearEdge = first?.nearScreenEdge ?? false
             if found == nil {
-                found = await controller.retryOriginalLookup(at: point).original
+                let retry = await controller.retryOriginalLookup(at: point)
+                found = retry.original
+                nearEdge = nearEdge || retry.nearScreenEdge
             }
             guard let original = found else {
-                AppLog.log("長押し: 原寸画像を特定できなかったため保存せず")
-                longPressNotice = "この写真の元の画像を特定できなかったため、保存しませんでした。"
+                AppLog.log("長押し: 原寸画像を特定できなかったため保存せず\(nearEdge ? "(写真が画面の端にかかっている)" : "")")
+                longPressNotice = nearEdge
+                    ? "写真の一部が画面の外にあります。写真全体が見えるようにスクロールしてから長押ししてください。"
+                    : "この写真の元の画像を特定できなかったため、保存しませんでした。"
                 return
             }
             AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")

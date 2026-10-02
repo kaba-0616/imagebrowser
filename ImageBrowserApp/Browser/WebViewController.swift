@@ -716,6 +716,10 @@ final class WebViewController: NSObject, ObservableObject {
         /// Just the photo's own pixels on screen -- a far better fallback
         /// than the whole-screen crop when no original matched.
         var photoCrop: UIImage?
+        /// The detected frame runs into the top or bottom of the page view
+        /// -- most likely a photo scrolled partly out of sight, which is
+        /// matched far less reliably (seen on device).
+        var nearScreenEdge = false
     }
 
     /// Second attempt when the first found nothing (user request: try once
@@ -751,6 +755,8 @@ final class WebViewController: NSObject, ObservableObject {
         let rectInPoints = "x\(Int(rect.minX / pixelsPerPoint)) y\(Int(rect.minY / pixelsPerPoint)) \(Int(rect.width / pixelsPerPoint))x\(Int(rect.height / pixelsPerPoint))pt"
         AppLog.log("長押し画像の照合: 写真の枠 \(rectInPoints)")
         var result = LongPressLookup(original: nil, photoCrop: UIImage(cgImage: photo))
+        let height = CGFloat(cgImage.height)
+        result.nearScreenEdge = rect.minY < height * 0.1 || rect.maxY > height * 0.95
 
         let trimmed = ImageMatcher.trimUniformBorders(photo)
         let aspect = CGFloat(trimmed.width) / CGFloat(max(trimmed.height, 1))

@@ -201,6 +201,17 @@ enum ImageMatcher {
         let seed = max(width / 16, 2)
         var left = max(px - seed, 0), right = min(px + seed, width - 1)
         var top = max(py - seed, 0), bottom = min(py + seed, height - 1)
+        // A seed pressed near a photo's edge can reach past it into the
+        // surroundings -- right under the site's header it reached into the
+        // header's white band, whose shade differs from the message bubble,
+        // and the box then grew past the photo's side (seen on device: a
+        // 205pt-wide photo detected as 259pt). Pull back any seed side that
+        // is plain background before growing.
+        while top < py, rowFlat(top, left, right) { top += 1 }
+        while bottom > py, rowFlat(bottom, left, right) { bottom -= 1 }
+        while left < px, columnFlat(left, top, bottom) { left += 1 }
+        while right > px, columnFlat(right, top, bottom) { right -= 1 }
+
         var grew = true
         while grew {
             grew = false
