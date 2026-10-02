@@ -41,10 +41,6 @@ struct ImageGridView: View {
             .overlay(savingOverlay)
             .animation(.easeInOut(duration: 0.15), value: photoSaver.isSaving)
             .preferredColorScheme(.dark)
-            // This screen is itself a sheet: in full-screen mode the
-            // swipe-down that should go back to the grid was also dragging
-            // the whole sheet closed (seen on device).
-            .interactiveDismissDisabled(displayMode == .fullscreen)
             .sheet(isPresented: $showSaveLog) {
                 SaveLogView { showSaveLog = false }
             }

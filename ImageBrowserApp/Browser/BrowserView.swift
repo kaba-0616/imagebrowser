@@ -130,7 +130,11 @@ private struct BrowserTabContentView: View {
             addressText = controller.urlString
         }
         .task { await adConsent.start() }
-        .sheet(isPresented: $showGrid) {
+        // Full-screen cover, not a sheet: a sheet can be swiped down to
+        // close, and that drag fought with the full-screen viewer's own
+        // swipe-down-to-grid (user request: no swipe-to-close at all; the
+        // grid's 閉じる button is the way out).
+        .fullScreenCover(isPresented: $showGrid) {
             ImageGridView(images: extractedImages, pageTitle: controller.pageTitle) {
                 showGrid = false
             }
