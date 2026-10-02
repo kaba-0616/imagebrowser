@@ -28,8 +28,8 @@ enum AdUnit {
     var id: String {
         switch self {
         case .bottom: return "ca-app-pub-1034383442757151/9505213630"
-        // TODO: AdMobで発行したリワード広告ユニットIDに差し替える(現在はGoogle公式のテスト用ID)。
-        case .rewarded: return "ca-app-pub-3940256099942544/1712485313"
+        // 広告ユニット名「一括抽出リワード」。
+        case .rewarded: return "ca-app-pub-1034383442757151/7416254264"
         }
     }
 }
