@@ -6,9 +6,3 @@ ImageBrowser.xcodeproj/
 ImageBrowserApp/Info.plist
 build/
 .DS_Store
-
-# XcodeGen / ローカルビルドの生成物
-ImageBrowser.xcodeproj/
-ImageBrowserApp/Info.plist
-build/
-.DS_Store
