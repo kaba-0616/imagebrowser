@@ -1,2 +1,8 @@
 docs/ci-signing-setup.md
 tools/icon_previews/
+
+# XcodeGen / xcodebuild で生成されるもの(project.yml が正)
+ImageBrowser.xcodeproj/
+ImageBrowserApp/Info.plist
+build/
+.DS_Store

@@ -31,12 +31,12 @@
 ## 開発環境
 
 Windowsのみ・Mac/Xcode無しの制約下で開発している。詳細な運用ルールは
-`../ios-dev-without-mac-playbook.md`を参照。
+`../ios-dev-playbook.md`を参照。
 
 - XcodeGen(`project.yml`)でプロジェクト定義を管理。`.xcodeproj`はコミットしない
 - `.github/workflows/build.yml`: push時に未署名ビルドでコンパイル確認
 - `.github/workflows/testflight.yml`: 手動実行でTestFlightへ署名付きアップロード
-- バージョン運用ルールは`../ios-dev-without-mac-playbook.md`の
+- バージョン運用ルールは`../ios-dev-playbook.md`の
   「バージョン番号の運用ルール」に準拠(リリースまでは`0.x.x`固定、
   ビルド番号はpushのたびに必ず1つ上げる)
 
