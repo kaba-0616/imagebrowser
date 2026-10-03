@@ -30,21 +30,25 @@
 
 ## 開発環境
 
-Windowsのみ・Mac/Xcode無しの制約下で開発している。詳細な運用ルールは
+Mac(Xcode)で開発し、配布はGitHub Actions経由でTestFlightへ行う。詳細な運用ルールは
 `../ios-dev-playbook.md`を参照。
 
 - XcodeGen(`project.yml`)でプロジェクト定義を管理。`.xcodeproj`はコミットしない
 - `.github/workflows/build.yml`: push時に未署名ビルドでコンパイル確認
 - `.github/workflows/testflight.yml`: 手動実行でTestFlightへ署名付きアップロード
 - バージョン運用ルールは`../ios-dev-playbook.md`の
-  「バージョン番号の運用ルール」に準拠(リリースまでは`0.x.x`固定、
-  ビルド番号はpushのたびに必ず1つ上げる)
+  「バージョン番号の運用ルール」に準拠(公開済みのためSemVer、
+  ビルド番号はバージョンごとに1から振り直す)
 
 ## 開発時の検証
 
 ```
+xcodegen generate
+xcodebuild -scheme ImageBrowserApp -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 node tools/dryrun.js
 ```
+
+前者でコンパイルを確認してからpushする(Actionsの無料枠を節約)。
 
 `ImageBrowserApp/ImageExtraction/ImageCollector.js`の画像収集ロジックを、
 実機ビルド無しに疑似DOM上で検証する。主要ニュース/音楽サイト・SNS・
