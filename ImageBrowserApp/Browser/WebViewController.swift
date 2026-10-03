@@ -688,6 +688,28 @@ final class WebViewController: NSObject, ObservableObject {
             // which may already include the site's own long-press overlay.
             let early = self.touchDownScreen.flatMap { Date().timeIntervalSince($0.at) < 3 ? $0.image : nil }
             self.touchDownScreen = nil
+            var screen = early
+            if screen == nil {
+                screen = await self.captureCrop(around: point, region: self.webView.bounds, margin: 0)
+            }
+            // Every press on a canvas page lands here, photo or not -- so
+            // only offer the menu when the pixels show a photo frame at that
+            // point (pressing empty space or text used to bring it up too).
+            if let screen, !Self.hasPhotoFrame(in: screen, at: point) {
+                AppLog.log("長押し位置に写真の枠がないためメニューを出さない (\(Int(point.x)), \(Int(point.y)))")
+                return
+            }
+            // Outside a talk timeline (e.g. the talk list) there's nothing
+            // to find an original among, so a "photo" there -- usually a
+            // member icon -- could only end in the not-found notice.
+            if self.currentTalkGroupID == nil {
+                let seen = (try? await webView.evaluateJavaScript(
+                    "window.__ImageBrowserSeenImages ? window.__ImageBrowserSeenImages().length : 0")) as? Int ?? 0
+                if seen == 0 {
+                    AppLog.log("長押し: 照合できる画像がないページのためメニューを出さない (\(Int(point.x)), \(Int(point.y)))")
+                    return
+                }
+            }
             let region = await ImageExtractionBridge.canvasRegion(in: webView, at: point)
             AppLog.debug("切り出し範囲: \(region.map { "\($0)" } ?? "取得できず、固定サイズにフォールバック")")
             guard let cropped = await self.captureCrop(around: point, region: region) else {
@@ -699,10 +721,6 @@ final class WebViewController: NSObject, ObservableObject {
             // accessibility region above turned out to be the entire screen
             // on Sakurazaka46 Message (both in the timeline and the viewer).
             AppLog.log("長押し画像の照合: 画面の撮影 \(early != nil ? "指が触れた時点" : "長押し判定後(サイトのメニューが写り込む可能性あり)")")
-            var screen = early
-            if screen == nil {
-                screen = await self.captureCrop(around: point, region: self.webView.bounds, margin: 0)
-            }
             if let screen {
                 self.longPressOriginalLookup = Task { [weak self] in
                     await self?.findOriginal(onScreen: screen, at: point) ?? LongPressLookup()
@@ -743,6 +761,13 @@ final class WebViewController: NSObject, ObservableObject {
             return LongPressLookup()
         }
         return await findOriginal(onScreen: screen, at: point, thorough: true)
+    }
+
+    private static func hasPhotoFrame(in screen: UIImage, at point: CGPoint) -> Bool {
+        guard let cgImage = bitmap(of: screen), screen.size.width > 0 else { return true }
+        let pixelsPerPoint = CGFloat(cgImage.width) / screen.size.width
+        let pixelPoint = CGPoint(x: point.x * pixelsPerPoint, y: point.y * pixelsPerPoint)
+        return ImageMatcher.photoRect(in: cgImage, around: pixelPoint) != nil
     }
 
     private func findOriginal(onScreen screen: UIImage, at point: CGPoint, thorough: Bool = false) async -> LongPressLookup {
