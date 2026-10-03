@@ -65,12 +65,12 @@ struct SettingsView: View {
                     }
                 }
 
-                // TestFlight builds only -- never shown on App Store installs.
-                if StoreManager.isTestFlight {
+                // TestFlight/simulator builds only -- never shown on App Store installs.
+                if StoreManager.isTestBuild {
                     Section {
                         Toggle("Proを一時的に無効にする", isOn: $store.ignoreProForTesting)
                     } header: {
-                        Text("テスト用(TestFlight版のみ)")
+                        Text(StoreManager.isSimulator ? "テスト用(シミュレータ)" : "テスト用(TestFlight版のみ)")
                     } footer: {
                         Text("無料ユーザーの動作(広告・リワード広告など)を確認するための設定です。購入は取り消されません。")
                     }

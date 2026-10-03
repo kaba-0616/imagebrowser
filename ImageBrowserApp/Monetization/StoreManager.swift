@@ -24,6 +24,18 @@ final class StoreManager: ObservableObject {
     /// TestFlight installs carry a sandbox receipt; App Store installs don't.
     static let isTestFlight = Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
 
+    /// Local simulator runs are unsigned, so StoreKit purchases fail and the
+    /// rewarded ad times out there; treat them as Pro so features can be
+    /// checked. Compiled out of every device build.
+    #if targetEnvironment(simulator)
+    static let isSimulator = true
+    #else
+    static let isSimulator = false
+    #endif
+
+    /// Where the "behave as a free user" test toggle is offered.
+    static var isTestBuild: Bool { isTestFlight || isSimulator }
+
     /// TestFlight only: behave as a free user even with a (sandbox) Pro
     /// purchase, to try free-user flows such as the rewarded ad -- sandbox
     /// lifetime purchases can't be undone. Ignored on App Store builds.
@@ -34,7 +46,7 @@ final class StoreManager: ObservableObject {
         }
     }
 
-    private var proSuppressed: Bool { Self.isTestFlight && ignoreProForTesting }
+    private var proSuppressed: Bool { Self.isTestBuild && ignoreProForTesting }
 
     init() {
         transactionListenerTask = Task { [weak self] in
@@ -87,7 +99,7 @@ final class StoreManager: ObservableObject {
                 found = true
             }
         }
-        isPro = found && !proSuppressed
+        isPro = (found || Self.isSimulator) && !proSuppressed
     }
 
     private func handle(_ verification: VerificationResult<Transaction>) async {
