@@ -541,7 +541,17 @@ final class WebViewController: NSObject, ObservableObject {
             if let kept = newest[url.path], kept.at >= at { continue }
             newest[url.path] = (url, at)
         }
-        return newest.values.map(\.url)
+        // Dictionary order is random per run, which scrambled the grid.
+        // Message photos go oldest first by message number (the same
+        // top-to-bottom order as the talk screen); anything else follows in
+        // the order it was seen.
+        return newest.values.sorted { a, b in
+            let idA = messageID(of: a.url).flatMap { Int($0) } ?? Int.max
+            let idB = messageID(of: b.url).flatMap { Int($0) } ?? Int.max
+            if idA != idB { return idA < idB }
+            if a.at != b.at { return a.at < b.at }
+            return a.url.absoluteString < b.url.absoluteString
+        }.map(\.url)
     }
 
     /// The timeline list only ever loads `/thumbnails/` versions; the
