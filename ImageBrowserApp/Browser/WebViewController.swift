@@ -388,6 +388,9 @@ final class WebViewController: NSObject, ObservableObject {
         /// The thumbnail's pixel size, when the API reports it.
         let width: Int
         let height: Int
+        /// ISO 8601 delivery time. Ordering by it rather than by id matches
+        /// the site: ids follow creation, which differs for scheduled posts.
+        let publishedAt: String
 
         var isVideo: Bool {
             let lower = type.lowercased()
@@ -435,6 +438,15 @@ final class WebViewController: NSObject, ObservableObject {
         return result.messages
     }
 
+    /// Oldest first by delivery time, id as the tie-break (and the fallback
+    /// when the time is missing).
+    static func deliveryOrder(_ a: TimelineMessage, _ b: TimelineMessage) -> Bool {
+        if !a.publishedAt.isEmpty, !b.publishedAt.isEmpty, a.publishedAt != b.publishedAt {
+            return a.publishedAt < b.publishedAt
+        }
+        return (Int(a.id) ?? 0) < (Int(b.id) ?? 0)
+    }
+
     struct TimelineResult {
         let messages: [TimelineMessage]
         /// False when the walk stopped early (network error, timeout) --
@@ -463,8 +475,12 @@ final class WebViewController: NSObject, ObservableObject {
             timelineCache[groupID] = nil
             messages = await fetchTimeline(groupID: groupID, origin: origin, timeout: 190)
         }
-        let photos = messages.filter(\.isPhoto)
-            .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
+        let photos = messages.filter(\.isPhoto).sorted(by: Self.deliveryOrder)
+        // How often delivery order disagrees with id order -- if this is 0,
+        // a wrong-looking order has some other cause.
+        let outOfIDOrder = zip(photos, photos.dropFirst())
+            .filter { (Int($0.0.id) ?? 0) > (Int($0.1.id) ?? 0) }.count
+        AppLog.log("さかのぼり抽出: 配信日時順と番号順の食い違い\(outOfIDOrder)か所 最古\(photos.first?.publishedAt ?? "-") 最新\(photos.last?.publishedAt ?? "-")")
         let complete = lastTimelineComplete[groupID] ?? true
         // What got left out and why -- to tell "not a photo" apart from
         // "a photo the timeline listed without a file URL".
@@ -1244,7 +1260,8 @@ extension WebViewController: WKScriptMessageHandler {
                     file: (item["file"] as? String).flatMap(URL.init(string:)),
                     thumbnail: (item["thumbnail"] as? String).flatMap(URL.init(string:)),
                     width: item["width"] as? Int ?? 0,
-                    height: item["height"] as? Int ?? 0
+                    height: item["height"] as? Int ?? 0,
+                    publishedAt: item["at"] as? String ?? ""
                 )
             }
             let keys = (body["keys"] as? [String] ?? []).sorted().joined(separator: ",")
@@ -1254,7 +1271,7 @@ extension WebViewController: WKScriptMessageHandler {
             // itself runs newest first).
             var seen = Set<String>()
             let messages = parsed.filter { seen.insert($0.id).inserted }
-                .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
+                .sorted(by: Self.deliveryOrder)
             AppLog.log("タイムラインAPIの取得: トーク\(body["groupID"] as? String ?? "?") HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件(タイムライン\(body["fromTimeline"] as? Int ?? 0)件・過去メッセージ\(body["fromPast"] as? Int ?? 0)件) 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")\(continuation == nil ? "(待ち時間切れの後に到着、キャッシュのみ)" : "")",
                        isError: !error.isEmpty)
             // Only a full walk is cached: a partial one would hide the
