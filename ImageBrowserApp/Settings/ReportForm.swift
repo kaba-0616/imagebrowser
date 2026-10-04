@@ -11,6 +11,7 @@ enum ReportForm {
     private static let pageURLField = "entry.1600436185"
     private static let versionField = "entry.1679109138"
     private static let deviceField = "entry.469008126"
+    private static let osVersionField = "entry.1855921250"
 
     static func url(pageURL: URL? = nil) -> URL {
         var components = URLComponents(string: base)!
@@ -19,7 +20,8 @@ enum ReportForm {
             // Build number included: reports are for the developer, who
             // needs to know exactly which binary it was.
             URLQueryItem(name: versionField, value: AppVersion.short),
-            URLQueryItem(name: deviceField, value: deviceDescription),
+            URLQueryItem(name: deviceField, value: modelIdentifier),
+            URLQueryItem(name: osVersionField, value: "iOS \(UIDevice.current.systemVersion)"),
         ]
         if let pageURL, pageURL.scheme == "http" || pageURL.scheme == "https" {
             items.append(URLQueryItem(name: pageURLField, value: pageURL.absoluteString))
@@ -28,14 +30,14 @@ enum ReportForm {
         return components.url!
     }
 
-    /// e.g. "iPhone17,1 / iOS 26.0" -- the model identifier, since
-    /// UIDevice.model only ever says "iPhone".
-    private static var deviceDescription: String {
+    /// e.g. "iPhone17,1" -- the model identifier, since UIDevice.model only
+    /// ever says "iPhone".
+    private static var modelIdentifier: String {
         var info = utsname()
         uname(&info)
         let machine = withUnsafeBytes(of: &info.machine) { raw in
             String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
         }
-        return "\(machine) / iOS \(UIDevice.current.systemVersion)"
+        return machine
     }
 }
