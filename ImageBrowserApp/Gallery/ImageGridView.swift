@@ -94,7 +94,9 @@ struct ImageGridView: View {
                 .padding(.vertical, 8)
                 .background(Color.black)
 
-                if loadHistory != nil, historyImages == nil {
+                // Grid only: in the full-screen viewer it just takes space
+                // from the photo (user request).
+                if loadHistory != nil, historyImages == nil, displayMode == .grid {
                     historyBar
                 }
 
