@@ -183,6 +183,15 @@ private struct BrowserTabContentView: View {
                     controller.load(urlString: addressText)
                     addressFieldFocused = false
                 }
+            // Next to the URL like Safari (user request), not in the toolbar.
+            Button {
+                controller.reloadOrStop()
+            } label: {
+                Image(systemName: controller.isLoading ? "xmark" : "arrow.clockwise")
+                    .font(.system(size: 17))
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityLabel(controller.isLoading ? "読み込みを中止" : "再読み込み")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -205,8 +214,6 @@ private struct BrowserTabContentView: View {
             toolbarButton("chevron.left", disabled: !controller.canGoBack) { controller.goBack() }
                 .frame(maxWidth: .infinity)
             toolbarButton("chevron.right", disabled: !controller.canGoForward) { controller.goForward() }
-                .frame(maxWidth: .infinity)
-            toolbarButton(controller.isLoading ? "xmark" : "arrow.clockwise") { controller.reloadOrStop() }
                 .frame(maxWidth: .infinity)
             bookmarkButton
                 .frame(maxWidth: .infinity)
