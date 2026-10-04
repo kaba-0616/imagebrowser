@@ -373,6 +373,9 @@
         var messages = [];
         var keys = {};
         var pages = 0, status = 0;
+        // Network failures are retried until the walk completes (user
+        // request: don't stop half way), but not forever when offline.
+        var deadline = Date.now() + 180000;
         function finish(error) {
             post({
                 kind: "timeline", requestID: requestID, groupID: String(groupID), messages: messages,
@@ -381,7 +384,7 @@
         }
         function text(v) { return v === undefined || v === null ? "" : String(v); }
         // A page can fail mid-walk (seen on device: "Load failed" when the
-        // app went to the background), so each one is retried a few times.
+        // app went to the background); it's retried from that same page.
         function page(from, attempt) {
             attempt = attempt || 0;
             var url = apiOrigin + "/v2/groups/" + encodeURIComponent(groupID)
@@ -392,6 +395,9 @@
                     return res.status === 200 ? res.json() : null;
                 })
                 .then(function (json) {
+                    // A refusal (expired login...) won't change on retry, and
+                    // must not pass for "reached the end".
+                    if (status !== 200) { finish("HTTP " + status); return; }
                     pages++;
                     var list = (json && json.messages) || [];
                     for (var i = 0; i < list.length; i++) {
@@ -410,10 +416,10 @@
                     }
                     finish();
                 }, function (e) {
-                    if (attempt < 3) {
-                        setTimeout(function () { page(from, attempt + 1); }, 1000 * (attempt + 1));
+                    if (Date.now() < deadline) {
+                        setTimeout(function () { page(from, attempt + 1); }, Math.min(5000, 1000 * (attempt + 1)));
                     } else {
-                        finish(String(e));
+                        finish(String(e) + " (再試行" + attempt + "回)");
                     }
                 });
         }

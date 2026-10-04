@@ -308,7 +308,7 @@ struct ImageGridView: View {
                 // (it walks oldest first, so the newest are what's missing).
                 historyImages = result.images
                 historyIncomplete = !result.complete
-                historyMessage = result.complete ? nil : "通信が途切れたため一部だけ表示しています。もう一度押すと続きも読み込みます"
+                historyMessage = result.complete ? nil : "通信が途切れたため一部だけ表示しています。電波の良い場所でもう一度お試しください"
                 displayMode = .grid
             }
         }

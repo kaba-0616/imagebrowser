@@ -409,7 +409,9 @@ final class WebViewController: NSObject, ObservableObject {
 
     /// The whole timeline of one talk group, walked from the start via the
     /// site's own timeline API (see NetworkTap.js).
-    private func fetchTimeline(groupID: String, origin: String) async -> [TimelineMessage] {
+    /// `timeout` only bounds this caller's wait: long press gives up early,
+    /// "さかのぼり抽出" waits out the script's own retry deadline.
+    private func fetchTimeline(groupID: String, origin: String, timeout: Int = 20) async -> [TimelineMessage] {
         if let cached = timelineCache[groupID], Date().timeIntervalSince(cached.at) < 600 {
             lastTimelineComplete[groupID] = true
             return cached.messages
@@ -420,12 +422,11 @@ final class WebViewController: NSObject, ObservableObject {
             let script = "window.__ImageBrowserFetchTimeline && window.__ImageBrowserFetchTimeline('\(requestID)', '\(origin)', '\(groupID)'); true"
             webView.evaluateJavaScript(script, completionHandler: nil)
             Task { @MainActor [weak self] in
-                // Long talks run to 10+ pages; 20s cut those off (seen on
-                // device). A walk that outlives this still lands in the cache
+                // A walk that outlives the wait still lands in the cache
                 // (see the "timeline" message handler).
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000_000)
                 if let pending = self?.pendingTimeline.removeValue(forKey: requestID) {
-                    AppLog.log("タイムラインAPIの取得がタイムアウト(60秒)", isError: true)
+                    AppLog.log("タイムラインAPIの取得の待ち時間切れ(\(timeout)秒、読み込みは裏で継続)", isError: true)
                     pending.resume(returning: TimelineResult(messages: [], complete: false))
                 }
             }
@@ -454,12 +455,13 @@ final class WebViewController: NSObject, ObservableObject {
     func historyImages() async -> (images: [PageImage], complete: Bool) {
         guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return ([], true) }
         let started = Date()
-        var messages = await fetchTimeline(groupID: groupID, origin: origin)
+        // Slightly past NetworkTap.js' own 3-minute retry deadline.
+        var messages = await fetchTimeline(groupID: groupID, origin: origin, timeout: 190)
         // Cached for up to 10 minutes; signed URLs that ran out in the
         // meantime would just 403 on save, so fetch once more.
         if messages.contains(where: { $0.file.map { Self.isExpired($0, at: Date()) } ?? false }) {
             timelineCache[groupID] = nil
-            messages = await fetchTimeline(groupID: groupID, origin: origin)
+            messages = await fetchTimeline(groupID: groupID, origin: origin, timeout: 190)
         }
         let photos = messages.filter(\.isPhoto)
             .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
