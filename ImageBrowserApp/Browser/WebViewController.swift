@@ -375,7 +375,7 @@ final class WebViewController: NSObject, ObservableObject {
     /// below knows how to call.
     private var messageAPIOrigin: String?
     private var pendingRefresh: [String: CheckedContinuation<[String: RefreshedMessage], Never>] = [:]
-    private var pendingTimeline: [String: CheckedContinuation<[TimelineMessage], Never>] = [:]
+    private var pendingTimeline: [String: CheckedContinuation<TimelineResult, Never>] = [:]
     /// Per talk group, so repeated long presses don't re-walk the whole
     /// timeline. Kept 10 minutes -- the signed URLs inside expire.
     private var timelineCache: [String: (at: Date, messages: [TimelineMessage])] = [:]
@@ -411,27 +411,37 @@ final class WebViewController: NSObject, ObservableObject {
     /// site's own timeline API (see NetworkTap.js).
     private func fetchTimeline(groupID: String, origin: String) async -> [TimelineMessage] {
         if let cached = timelineCache[groupID], Date().timeIntervalSince(cached.at) < 600 {
+            lastTimelineComplete[groupID] = true
             return cached.messages
         }
         let requestID = UUID().uuidString
-        let messages: [TimelineMessage] = await withCheckedContinuation { continuation in
+        let result: TimelineResult = await withCheckedContinuation { continuation in
             pendingTimeline[requestID] = continuation
             let script = "window.__ImageBrowserFetchTimeline && window.__ImageBrowserFetchTimeline('\(requestID)', '\(origin)', '\(groupID)'); true"
             webView.evaluateJavaScript(script, completionHandler: nil)
             Task { @MainActor [weak self] in
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                // Long talks run to 10+ pages; 20s cut those off (seen on
+                // device). A walk that outlives this still lands in the cache
+                // (see the "timeline" message handler).
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
                 if let pending = self?.pendingTimeline.removeValue(forKey: requestID) {
-                    AppLog.log("タイムラインAPIの取得がタイムアウト(20秒)", isError: true)
-                    pending.resume(returning: [])
+                    AppLog.log("タイムラインAPIの取得がタイムアウト(60秒)", isError: true)
+                    pending.resume(returning: TimelineResult(messages: [], complete: false))
                 }
             }
         }
-        // Later pages overlap the previous one at the boundary.
-        var seen = Set<String>()
-        let unique = messages.filter { seen.insert($0.id).inserted }
-        if !unique.isEmpty { timelineCache[groupID] = (Date(), unique) }
-        return unique
+        lastTimelineComplete[groupID] = result.complete
+        return result.messages
     }
+
+    struct TimelineResult {
+        let messages: [TimelineMessage]
+        /// False when the walk stopped early (network error, timeout) --
+        /// the newest messages are the ones missing, since it walks oldest first.
+        let complete: Bool
+    }
+
+    private var lastTimelineComplete: [String: Bool] = [:]
 
     /// Whether "さかのぼり抽出" can run here: a talk timeline whose API
     /// origin is known (the name is deliberately site-neutral).
@@ -441,8 +451,8 @@ final class WebViewController: NSObject, ObservableObject {
 
     /// Every photo in the open talk, oldest first -- not just what has been
     /// scrolled into view. Pro only (enforced by the caller).
-    func historyImages() async -> [PageImage] {
-        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return [] }
+    func historyImages() async -> (images: [PageImage], complete: Bool) {
+        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return ([], true) }
         let started = Date()
         var messages = await fetchTimeline(groupID: groupID, origin: origin)
         // Cached for up to 10 minutes; signed URLs that ran out in the
@@ -453,11 +463,14 @@ final class WebViewController: NSObject, ObservableObject {
         }
         let photos = messages.filter(\.isPhoto)
             .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
-        AppLog.log("さかのぼり抽出: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(photos.count)件 \(Int(Date().timeIntervalSince(started) * 1000))ms")
-        return photos.compactMap { message in
+        let complete = lastTimelineComplete[groupID] ?? true
+        AppLog.log("さかのぼり抽出: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(photos.count)件\(complete ? "" : "(途中までしか読めず)") \(Int(Date().timeIntervalSince(started) * 1000))ms",
+                   isError: !complete)
+        let images = photos.compactMap { message -> PageImage? in
             guard let main = message.file ?? message.thumbnail else { return nil }
             return Self.candidate(main, rendered: message.file == nil ? nil : message.thumbnail)
         }
+        return (images, complete)
     }
 
     private var timelinePrefetching: Set<String> = []
@@ -1201,9 +1214,11 @@ extension WebViewController: WKScriptMessageHandler {
 
         switch kind {
         case "timeline":
-            guard let requestID = body["requestID"] as? String,
-                  let continuation = pendingTimeline.removeValue(forKey: requestID) else { return }
-            let messages = (body["messages"] as? [[String: Any]] ?? []).map { item in
+            guard let requestID = body["requestID"] as? String else { return }
+            // May be nil: the caller gave up waiting, but the result is
+            // still worth caching for the next lookup.
+            let continuation = pendingTimeline.removeValue(forKey: requestID)
+            let parsed = (body["messages"] as? [[String: Any]] ?? []).map { item in
                 TimelineMessage(
                     id: item["id"] as? String ?? "",
                     type: item["type"] as? String ?? "",
@@ -1215,9 +1230,17 @@ extension WebViewController: WKScriptMessageHandler {
             }
             let keys = (body["keys"] as? [String] ?? []).sorted().joined(separator: ",")
             let error = body["error"] as? String ?? ""
-            AppLog.log("タイムラインAPIの取得: HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")",
+            // Later pages overlap the previous one at the boundary.
+            var seen = Set<String>()
+            let messages = parsed.filter { seen.insert($0.id).inserted }
+            AppLog.log("タイムラインAPIの取得: HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")\(continuation == nil ? "(待ち時間切れの後に到着、キャッシュのみ)" : "")",
                        isError: !error.isEmpty)
-            continuation.resume(returning: messages)
+            // Only a full walk is cached: a partial one would hide the
+            // newest photos for the next 10 minutes.
+            if error.isEmpty, !messages.isEmpty, let groupID = body["groupID"] as? String {
+                timelineCache[groupID] = (Date(), messages)
+            }
+            continuation?.resume(returning: TimelineResult(messages: messages, complete: error.isEmpty))
             return
         case "refresh":
             guard let requestID = body["requestID"] as? String,

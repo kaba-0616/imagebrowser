@@ -375,12 +375,15 @@
         var pages = 0, status = 0;
         function finish(error) {
             post({
-                kind: "timeline", requestID: requestID, messages: messages, pages: pages,
-                status: status, keys: Object.keys(keys), error: error || ""
+                kind: "timeline", requestID: requestID, groupID: String(groupID), messages: messages,
+                pages: pages, status: status, keys: Object.keys(keys), error: error || ""
             });
         }
         function text(v) { return v === undefined || v === null ? "" : String(v); }
-        function page(from) {
+        // A page can fail mid-walk (seen on device: "Load failed" when the
+        // app went to the background), so each one is retried a few times.
+        function page(from, attempt) {
+            attempt = attempt || 0;
             var url = apiOrigin + "/v2/groups/" + encodeURIComponent(groupID)
                 + "/timeline?updated_from=" + encodeURIComponent(from) + "&count=200&order=asc";
             originalFetch.call(window, url, { headers: headers, credentials: "include" })
@@ -400,13 +403,19 @@
                             at: text(m.published_at)
                         });
                     }
-                    if (list.length >= 200 && pages < 30) {
+                    if (list.length >= 200 && pages < 100) {
                         var last = list[list.length - 1] || {};
                         var next = text(last.updated_at || last.published_at);
                         if (next && next !== from) { page(next); return; }
                     }
                     finish();
-                }, function (e) { finish(String(e)); });
+                }, function (e) {
+                    if (attempt < 3) {
+                        setTimeout(function () { page(from, attempt + 1); }, 1000 * (attempt + 1));
+                    } else {
+                        finish(String(e));
+                    }
+                });
         }
         if (!originalFetch) { finish("fetch unavailable"); return; }
         page("2000-01-01T00:00:00Z");

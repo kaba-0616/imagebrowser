@@ -16,7 +16,7 @@ struct ImageGridView: View {
     @ObservedObject var store: StoreManager
     /// "さかのぼり抽出": every photo the page's own data lists, not just what
     /// was scrolled into view. nil where the page offers no such data.
-    let loadHistory: (() async -> [PageImage])?
+    let loadHistory: (() async -> (images: [PageImage], complete: Bool))?
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -27,6 +27,7 @@ struct ImageGridView: View {
     @State private var fullscreenIndex: Int = 0
     @State private var showSaveLog = false
     @State private var historyImages: [PageImage]?
+    @State private var historyIncomplete = false
     @State private var isLoadingHistory = false
     @State private var historyMessage: String?
     @State private var showPaywall = false
@@ -96,7 +97,7 @@ struct ImageGridView: View {
 
                 // Grid only: in the full-screen viewer it just takes space
                 // from the photo (user request).
-                if loadHistory != nil, historyImages == nil, displayMode == .grid {
+                if loadHistory != nil, historyImages == nil || historyIncomplete, displayMode == .grid {
                     historyBar
                 }
 
@@ -296,12 +297,18 @@ struct ImageGridView: View {
         isLoadingHistory = true
         historyMessage = nil
         Task {
-            let found = await loadHistory()
+            let result = await loadHistory()
             isLoadingHistory = false
-            if found.isEmpty {
-                historyMessage = "過去の画像は見つかりませんでした"
+            if result.images.isEmpty {
+                historyMessage = result.complete
+                    ? "過去の画像は見つかりませんでした"
+                    : "読み込みが途中で止まりました。もう一度お試しください"
             } else {
-                historyImages = found
+                // A partial walk keeps the button so it can be run again
+                // (it walks oldest first, so the newest are what's missing).
+                historyImages = result.images
+                historyIncomplete = !result.complete
+                historyMessage = result.complete ? nil : "通信が途切れたため一部だけ表示しています。もう一度押すと続きも読み込みます"
                 displayMode = .grid
             }
         }
