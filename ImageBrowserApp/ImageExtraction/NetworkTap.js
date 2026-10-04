@@ -379,52 +379,71 @@
         function finish(error) {
             post({
                 kind: "timeline", requestID: requestID, groupID: String(groupID), messages: messages,
-                pages: pages, status: status, keys: Object.keys(keys), error: error || ""
+                pages: pages, status: status, keys: Object.keys(keys), error: error || "",
+                fromTimeline: fromTimeline, fromPast: fromPast
             });
         }
         function text(v) { return v === undefined || v === null ? "" : String(v); }
-        // A page can fail mid-walk (seen on device: "Load failed" when the
-        // app went to the background); it's retried from that same page.
-        function page(from, attempt) {
+        var fromTimeline = 0, fromPast = 0;
+        function add(list) {
+            for (var i = 0; i < list.length; i++) {
+                var m = list[i] || {};
+                for (var k in m) { keys[k] = 1; }
+                messages.push({
+                    id: text(m.id), type: text(m.type), file: text(m.file), thumbnail: text(m.thumbnail),
+                    width: m.thumbnail_width | 0, height: m.thumbnail_height | 0,
+                    at: text(m.published_at)
+                });
+            }
+            return list.length;
+        }
+        // GET with retry: a request can fail mid-walk (seen on device: "Load
+        // failed" when the app went to the background); it's retried as is,
+        // so the walk carries on from the same page. A non-200 is a refusal
+        // (expired login...) that retrying won't fix.
+        function get(url, onJSON, attempt) {
             attempt = attempt || 0;
-            var url = apiOrigin + "/v2/groups/" + encodeURIComponent(groupID)
-                + "/timeline?updated_from=" + encodeURIComponent(from) + "&count=200&order=asc";
             originalFetch.call(window, url, { headers: headers, credentials: "include" })
                 .then(function (res) {
                     status = res.status;
                     return res.status === 200 ? res.json() : null;
                 })
                 .then(function (json) {
-                    // A refusal (expired login...) won't change on retry, and
-                    // must not pass for "reached the end".
-                    if (status !== 200) { finish("HTTP " + status); return; }
-                    pages++;
-                    var list = (json && json.messages) || [];
-                    for (var i = 0; i < list.length; i++) {
-                        var m = list[i] || {};
-                        for (var k in m) { keys[k] = 1; }
-                        messages.push({
-                            id: text(m.id), type: text(m.type), file: text(m.file), thumbnail: text(m.thumbnail),
-                            width: m.thumbnail_width | 0, height: m.thumbnail_height | 0,
-                            at: text(m.published_at)
-                        });
-                    }
-                    if (list.length >= 200 && pages < 100) {
-                        var last = list[list.length - 1] || {};
-                        var next = text(last.updated_at || last.published_at);
-                        if (next && next !== from) { page(next); return; }
-                    }
-                    finish();
+                    if (status !== 200) { finish("HTTP " + status + " " + url.split("?")[0].split("/").pop()); return; }
+                    onJSON(json || {});
                 }, function (e) {
                     if (Date.now() < deadline) {
-                        setTimeout(function () { page(from, attempt + 1); }, Math.min(5000, 1000 * (attempt + 1)));
+                        setTimeout(function () { get(url, onJSON, attempt + 1); }, Math.min(5000, 1000 * (attempt + 1)));
                     } else {
                         finish(String(e) + " (再試行" + attempt + "回)");
                     }
                 });
         }
+        var base = apiOrigin + "/v2/groups/" + encodeURIComponent(groupID);
+        // The same walk the site's own timeline does: newest first, then
+        // follow `continuation` back to the start. The updated_from/asc
+        // query used before returned only part of a talk (588 messages
+        // where the site's own photo list showed far more).
+        function page(continuation) {
+            var url = base + "/timeline?" + (continuation
+                ? "continuation=" + encodeURIComponent(continuation)
+                : "count=200&order=desc");
+            get(url, function (json) {
+                pages++;
+                fromTimeline += add(json.messages || []);
+                if (json.continuation && pages < 200) { page(json.continuation); return; }
+                past();
+            });
+        }
+        // Messages the site lists separately as "past" ones.
+        function past() {
+            get(base + "/past_messages", function (json) {
+                fromPast += add(json.messages || []);
+                finish();
+            });
+        }
         if (!originalFetch) { finish("fetch unavailable"); return; }
-        page("2000-01-01T00:00:00Z");
+        page("");
     };
 
     XMLHttpRequest.prototype.send = function () {

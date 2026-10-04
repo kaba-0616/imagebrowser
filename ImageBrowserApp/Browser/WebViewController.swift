@@ -1249,10 +1249,13 @@ extension WebViewController: WKScriptMessageHandler {
             }
             let keys = (body["keys"] as? [String] ?? []).sorted().joined(separator: ",")
             let error = body["error"] as? String ?? ""
-            // Later pages overlap the previous one at the boundary.
+            // Pages can overlap at the boundary, and past_messages may repeat
+            // timeline ones. Oldest first, as callers expect (the walk
+            // itself runs newest first).
             var seen = Set<String>()
             let messages = parsed.filter { seen.insert($0.id).inserted }
-            AppLog.log("タイムラインAPIの取得: トーク\(body["groupID"] as? String ?? "?") HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")\(continuation == nil ? "(待ち時間切れの後に到着、キャッシュのみ)" : "")",
+                .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
+            AppLog.log("タイムラインAPIの取得: トーク\(body["groupID"] as? String ?? "?") HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件(タイムライン\(body["fromTimeline"] as? Int ?? 0)件・過去メッセージ\(body["fromPast"] as? Int ?? 0)件) 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")\(continuation == nil ? "(待ち時間切れの後に到着、キャッシュのみ)" : "")",
                        isError: !error.isEmpty)
             // Only a full walk is cached: a partial one would hide the
             // newest photos for the next 10 minutes.
