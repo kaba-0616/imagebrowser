@@ -395,6 +395,16 @@ final class WebViewController: NSObject, ObservableObject {
             return lower.contains("video") || lower.contains("movie")
                 || ["mp4", "mov", "m4v", "m3u8", "webm"].contains(ext)
         }
+
+        /// A photo message. Not just "not a video": voice messages carry an
+        /// .m4a file too, and those showed up in the grid as undecodable
+        /// (seen on device).
+        var isPhoto: Bool {
+            guard !isVideo else { return false }
+            let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "gif", "webp", "heic", "jfif"]
+            if let file { return imageExtensions.contains(file.pathExtension.lowercased()) }
+            return thumbnail.map { imageExtensions.contains($0.pathExtension.lowercased()) } ?? false
+        }
     }
 
     /// The whole timeline of one talk group, walked from the start via the
@@ -441,7 +451,7 @@ final class WebViewController: NSObject, ObservableObject {
             timelineCache[groupID] = nil
             messages = await fetchTimeline(groupID: groupID, origin: origin)
         }
-        let photos = messages.filter { !$0.isVideo && ($0.file != nil || $0.thumbnail != nil) }
+        let photos = messages.filter(\.isPhoto)
             .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
         AppLog.log("さかのぼり抽出: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(photos.count)件 \(Int(Date().timeIntervalSince(started) * 1000))ms")
         return photos.compactMap { message in
@@ -864,7 +874,7 @@ final class WebViewController: NSObject, ObservableObject {
     private func timelineCandidates(photoAspect: CGFloat, thorough: Bool = false) async -> [PageImage]? {
         guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return nil }
         let messages = await fetchTimeline(groupID: groupID, origin: origin)
-        let media = messages.filter { !$0.isVideo && ($0.file != nil || $0.thumbnail != nil) }
+        let media = messages.filter(\.isPhoto)
         let withShape = media.filter { $0.width > 0 && $0.height > 0 }
         let sameShape = withShape.filter {
             abs(CGFloat($0.width) / CGFloat($0.height) - photoAspect) / photoAspect < 0.06
