@@ -423,6 +423,33 @@ final class WebViewController: NSObject, ObservableObject {
         return unique
     }
 
+    /// Whether "さかのぼり抽出" can run here: a talk timeline whose API
+    /// origin is known (the name is deliberately site-neutral).
+    var canLoadHistory: Bool {
+        messageAPIOrigin != nil && currentTalkGroupID != nil
+    }
+
+    /// Every photo in the open talk, oldest first -- not just what has been
+    /// scrolled into view. Pro only (enforced by the caller).
+    func historyImages() async -> [PageImage] {
+        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return [] }
+        let started = Date()
+        var messages = await fetchTimeline(groupID: groupID, origin: origin)
+        // Cached for up to 10 minutes; signed URLs that ran out in the
+        // meantime would just 403 on save, so fetch once more.
+        if messages.contains(where: { $0.file.map { Self.isExpired($0, at: Date()) } ?? false }) {
+            timelineCache[groupID] = nil
+            messages = await fetchTimeline(groupID: groupID, origin: origin)
+        }
+        let photos = messages.filter { !$0.isVideo && ($0.file != nil || $0.thumbnail != nil) }
+            .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
+        AppLog.log("さかのぼり抽出: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(photos.count)件 \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        return photos.compactMap { message in
+            guard let main = message.file ?? message.thumbnail else { return nil }
+            return Self.candidate(main, rendered: message.file == nil ? nil : message.thumbnail)
+        }
+    }
+
     private var timelinePrefetching: Set<String> = []
 
     /// Opening a talk walks its whole timeline in the background, so the

@@ -13,6 +13,10 @@ struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
     let pageURL: URL?
+    @ObservedObject var store: StoreManager
+    /// "さかのぼり抽出": every photo the page's own data lists, not just what
+    /// was scrolled into view. nil where the page offers no such data.
+    let loadHistory: (() async -> [PageImage])?
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -22,9 +26,16 @@ struct ImageGridView: View {
     @State private var displayMode: DisplayMode = .grid
     @State private var fullscreenIndex: Int = 0
     @State private var showSaveLog = false
+    @State private var historyImages: [PageImage]?
+    @State private var isLoadingHistory = false
+    @State private var historyMessage: String?
+    @State private var showPaywall = false
+
+    /// The history results replace the scrolled-in ones: they're a superset.
+    private var sourceImages: [PageImage] { historyImages ?? images }
 
     private var visibleImages: [PageImage] {
-        images.filter { !photoSaver.savedImageIDs.contains($0.id) }
+        sourceImages.filter { !photoSaver.savedImageIDs.contains($0.id) }
     }
 
     private var selectedVisible: [PageImage] {
@@ -44,6 +55,9 @@ struct ImageGridView: View {
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showSaveLog) {
                 SaveLogView { showSaveLog = false }
+            }
+            .sheet(isPresented: $showPaywall) {
+                PaywallView(store: store) { showPaywall = false }
             }
     }
 
@@ -80,13 +94,17 @@ struct ImageGridView: View {
                 .padding(.vertical, 8)
                 .background(Color.black)
 
+                if loadHistory != nil, historyImages == nil {
+                    historyBar
+                }
+
                 if visibleImages.isEmpty {
                     Spacer()
                     Text(emptyMessage)
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
-                    if images.isEmpty {
+                    if sourceImages.isEmpty {
                         Link(destination: ReportForm.url(pageURL: pageURL)) {
                             Label("このサイトを報告", systemImage: "exclamationmark.bubble")
                         }
@@ -224,9 +242,67 @@ struct ImageGridView: View {
     }
 
     private var emptyMessage: String {
-        if images.isEmpty { return "画像が見つかりませんでした" }
-        if images.allSatisfy({ photoSaver.savedImageIDs.contains($0.id) }) { return "すべて保存しました" }
+        if sourceImages.isEmpty { return "画像が見つかりませんでした" }
+        if sourceImages.allSatisfy({ photoSaver.savedImageIDs.contains($0.id) }) { return "すべて保存しました" }
         return "画像が見つかりませんでした"
+    }
+
+    private var historyBar: some View {
+        VStack(spacing: 4) {
+            Button {
+                startHistoryLoad()
+            } label: {
+                HStack(spacing: 6) {
+                    if isLoadingHistory {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: store.isPro ? "clock.arrow.circlepath" : "lock.fill")
+                    }
+                    Text(isLoadingHistory ? "さかのぼっています…" : "さかのぼり抽出")
+                        .bold()
+                    if !store.isPro {
+                        Text("Pro")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor))
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color(white: 0.16)))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(.white)
+            .disabled(isLoadingHistory)
+            Text(historyMessage ?? "スクロールしなくても、このページの過去の画像までまとめて探します")
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+        .background(Color.black)
+    }
+
+    private func startHistoryLoad() {
+        guard store.isPro else {
+            showPaywall = true
+            return
+        }
+        guard let loadHistory else { return }
+        isLoadingHistory = true
+        historyMessage = nil
+        Task {
+            let found = await loadHistory()
+            isLoadingHistory = false
+            if found.isEmpty {
+                historyMessage = "過去の画像は見つかりませんでした"
+            } else {
+                historyImages = found
+                displayMode = .grid
+            }
+        }
     }
 
     private func toggleSelection(_ id: Int) {

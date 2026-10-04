@@ -135,7 +135,13 @@ private struct BrowserTabContentView: View {
         // swipe-down-to-grid (user request: no swipe-to-close at all; the
         // grid's 閉じる button is the way out).
         .fullScreenCover(isPresented: $showGrid) {
-            ImageGridView(images: extractedImages, pageTitle: controller.pageTitle, pageURL: URL(string: controller.urlString)) {
+            ImageGridView(
+                images: extractedImages,
+                pageTitle: controller.pageTitle,
+                pageURL: URL(string: controller.urlString),
+                store: store,
+                loadHistory: controller.canLoadHistory ? { await controller.historyImages() } : nil
+            ) {
                 showGrid = false
             }
         }
