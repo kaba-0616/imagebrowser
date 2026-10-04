@@ -12,6 +12,7 @@ enum DisplayMode: String, CaseIterable {
 struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
+    let pageURL: URL?
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -85,6 +86,18 @@ struct ImageGridView: View {
                         .foregroundColor(.gray)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+                    if images.isEmpty {
+                        Link(destination: ReportForm.url(pageURL: pageURL)) {
+                            Label("このサイトを報告", systemImage: "exclamationmark.bubble")
+                        }
+                        .padding(.top, 16)
+                        Text("うまく画像が出ないサイトを教えてください。今後の改善に使います。")
+                            .font(.footnote)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
+                            .padding(.top, 4)
+                    }
                     Spacer()
                 } else if displayMode == .grid {
                     gridContent
@@ -100,6 +113,14 @@ struct ImageGridView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { onClose() }
+                }
+                // For results that are there but incomplete (e.g. some
+                // photos missing) -- the empty screen has its own button.
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Link(destination: ReportForm.url(pageURL: pageURL)) {
+                        Image(systemName: "exclamationmark.bubble")
+                    }
+                    .accessibilityLabel("このサイトを報告")
                 }
             }
         }

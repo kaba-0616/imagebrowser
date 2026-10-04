@@ -79,6 +79,7 @@ struct SettingsView: View {
                 Section("サポート") {
                     Link("プライバシーポリシー", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!)
                     Link("サポート", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e815cb39acc3d6bc37793")!)
+                    Link("うまく保存できないサイトを報告", destination: ReportForm.url())
                     Button("保存ログを見る") { showSaveLog = true }
                 }
 
