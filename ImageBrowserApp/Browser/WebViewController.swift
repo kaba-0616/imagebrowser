@@ -466,11 +466,28 @@ final class WebViewController: NSObject, ObservableObject {
         let photos = messages.filter(\.isPhoto)
             .sorted { (Int($0.id) ?? 0) < (Int($1.id) ?? 0) }
         let complete = lastTimelineComplete[groupID] ?? true
-        AppLog.log("さかのぼり抽出: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(photos.count)件\(complete ? "" : "(途中までしか読めず)") \(Int(Date().timeIntervalSince(started) * 1000))ms",
+        // What got left out and why -- to tell "not a photo" apart from
+        // "a photo the timeline listed without a file URL".
+        let typeBreakdown = Dictionary(grouping: messages) { message -> String in
+            let ext = (message.file ?? message.thumbnail)?.pathExtension.lowercased() ?? ""
+            return "\(message.type.isEmpty ? "不明" : message.type)(\(ext.isEmpty ? "ファイルなし" : ext))"
+        }
+        .map { "\($0.key):\($0.value.count)" }.sorted().joined(separator: ", ")
+        AppLog.log("さかのぼり抽出: トーク\(groupID)のメッセージ\(messages.count)件中、写真\(photos.count)件\(complete ? "" : "(途中までしか読めず)") \(Int(Date().timeIntervalSince(started) * 1000))ms 種類内訳[\(typeBreakdown)]",
                    isError: !complete)
         let images = photos.compactMap { message -> PageImage? in
             guard let main = message.file ?? message.thumbnail else { return nil }
-            return Self.candidate(main, rendered: message.file == nil ? nil : message.thumbnail)
+            // Keyed on the message number, not the URL hash `candidate`
+            // uses: hashing into a million slots collided often enough at
+            // hundreds of photos that the grid (which keys on id) dropped some.
+            let id = Int(message.id).map { 10_000_000 + $0 }
+                ?? Self.candidate(main, rendered: nil).id
+            return PageImage(id: id, url: main, width: 0, height: 0,
+                             renderedURL: message.file == nil ? nil : message.thumbnail, origin: "network")
+        }
+        let uniqueIDs = Set(images.map(\.id)).count
+        if uniqueIDs != images.count {
+            AppLog.log("さかのぼり抽出: 表示用の番号が重複 \(images.count)件中\(images.count - uniqueIDs)件", isError: true)
         }
         return (images, complete)
     }
@@ -1235,7 +1252,7 @@ extension WebViewController: WKScriptMessageHandler {
             // Later pages overlap the previous one at the boundary.
             var seen = Set<String>()
             let messages = parsed.filter { seen.insert($0.id).inserted }
-            AppLog.log("タイムラインAPIの取得: HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")\(continuation == nil ? "(待ち時間切れの後に到着、キャッシュのみ)" : "")",
+            AppLog.log("タイムラインAPIの取得: トーク\(body["groupID"] as? String ?? "?") HTTP\(body["status"] as? Int ?? 0) \(body["pages"] as? Int ?? 0)ページ メッセージ\(messages.count)件 項目[\(keys)]\(error.isEmpty ? "" : " エラー: \(error)")\(continuation == nil ? "(待ち時間切れの後に到着、キャッシュのみ)" : "")",
                        isError: !error.isEmpty)
             // Only a full walk is cached: a partial one would hide the
             // newest photos for the next 10 minutes.
