@@ -31,6 +31,7 @@ struct ImageGridView: View {
     @State private var isLoadingHistory = false
     @State private var historyMessage: String?
     @State private var showPaywall = false
+    @State private var reportFormURL: URL?
 
     /// The history results replace the scrolled-in ones: they're a superset.
     private var sourceImages: [PageImage] { historyImages ?? images }
@@ -56,6 +57,18 @@ struct ImageGridView: View {
             .preferredColorScheme(.dark)
             .sheet(isPresented: $showSaveLog) {
                 SaveLogView { showSaveLog = false }
+            }
+            .sheet(isPresented: Binding(
+                get: { reportFormURL != nil },
+                set: { if !$0 { reportFormURL = nil } }
+            )) {
+                if let url = reportFormURL {
+                    ContactFormSheet(url: url) {
+                        ContactStore.shared.markSubmitted()
+                    } onClose: {
+                        reportFormURL = nil
+                    }
+                }
             }
             .sheet(isPresented: $showPaywall) {
                 PaywallView(store: store) { showPaywall = false }
@@ -108,7 +121,7 @@ struct ImageGridView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
                     if sourceImages.isEmpty {
-                        Link(destination: ReportForm.url(pageURL: pageURL)) {
+                        Button(action: openReportForm) {
                             Label("このサイトを報告", systemImage: "exclamationmark.bubble")
                         }
                         .padding(.top, 16)
@@ -138,7 +151,7 @@ struct ImageGridView: View {
                 // For results that are there but incomplete (e.g. some
                 // photos missing) -- the empty screen has its own button.
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Link(destination: ReportForm.url(pageURL: pageURL)) {
+                    Button(action: openReportForm) {
                         Image(systemName: "exclamationmark.bubble")
                     }
                     .accessibilityLabel("このサイトを報告")
@@ -146,6 +159,13 @@ struct ImageGridView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    /// Same in-app form as Settings > お問い合わせ, with this page's URL
+    /// filled in; the inquiry number then shows up in that screen's list.
+    private func openReportForm() {
+        ContactStore.shared.prepareInquiry()
+        reportFormURL = ContactStore.shared.formURL(pageURL: pageURL)
     }
 
     private var gridContent: some View {
