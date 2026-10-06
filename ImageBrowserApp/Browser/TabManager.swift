@@ -8,6 +8,11 @@ import WebKit
 final class BrowserTab: ObservableObject, Identifiable {
     let id = UUID()
     let controller: WebViewController
+    /// The last URL this tab was known to show -- what saveState() falls
+    /// back to while `webView.url` is nil, instead of the home page.
+    var lastKnownURL: String?
+    /// So a tab whose URL stays nil is logged once, not on every save.
+    var loggedMissingURL = false
 
     init() {
         controller = WebViewController()
@@ -87,6 +92,7 @@ final class TabManager: ObservableObject {
 
     private func makeTab(loading urlString: String) -> BrowserTab {
         let tab = BrowserTab()
+        tab.lastKnownURL = urlString
         tab.controller.load(urlString: urlString)
         wireTab(tab)
         return tab
@@ -118,6 +124,12 @@ final class TabManager: ObservableObject {
             return
         }
 
+        // Diagnostics for tabs all coming back as the home page after
+        // switching between the App Store and TestFlight builds.
+        let home = BrowserDefaults.homeURL.absoluteString
+        let hosts = savedURLs.map { URL(string: $0)?.host ?? "?" }
+        AppLog.log("タブ復元: \(savedURLs.count)件(ホーム\(savedURLs.filter { $0 == home }.count)件) \(hosts.joined(separator: ", "))")
+
         let restored = savedURLs.map { makeTab(loading: $0) }
         tabs = restored
         let savedIndex = UserDefaults.standard.integer(forKey: Self.savedActiveIndexKey)
@@ -136,7 +148,20 @@ final class TabManager: ObservableObject {
     /// lag since it's read straight from WebKit, not our own mirror.
     private func saveState() {
         let urls = tabs.map { tab -> String in
-            tab.controller.webView.url?.absoluteString ?? BrowserDefaults.homeURL.absoluteString
+            if let current = tab.controller.webView.url?.absoluteString {
+                tab.lastKnownURL = current
+                tab.loggedMissingURL = false
+                return current
+            }
+            // webView.url can be nil while a tab hasn't committed its first
+            // load (or its web content process is gone); saving the home
+            // page then would lose the tab's real page for good.
+            if !tab.loggedMissingURL {
+                tab.loggedMissingURL = true
+                let host = tab.lastKnownURL.flatMap { URL(string: $0)?.host } ?? "なし"
+                AppLog.log("タブ保存: URL未確定のタブあり(直前のURL: \(host))")
+            }
+            return tab.lastKnownURL ?? BrowserDefaults.homeURL.absoluteString
         }
         UserDefaults.standard.set(urls, forKey: Self.savedURLsKey)
         let index = activeTabID.flatMap { id in tabs.firstIndex { $0.id == id } } ?? 0
