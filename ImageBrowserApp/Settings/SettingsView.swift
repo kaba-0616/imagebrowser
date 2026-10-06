@@ -80,19 +80,24 @@ struct SettingsView: View {
                     Link("プライバシーポリシー", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!)
                     Link("サポート", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e815cb39acc3d6bc37793")!)
                     NavigationLink("お問い合わせ") { ContactView() }
-                    Button("保存ログを見る") { showSaveLog = true }
                 }
 
-                Section {
-                    Toggle("詳細ログを記録", isOn: Binding(
-                        get: { verboseDiagnostics },
-                        set: {
-                            verboseDiagnostics = $0
-                            DiagnosticsStore.isVerbose = $0
-                        }
-                    ))
-                } footer: {
-                    Text("不具合の調査用です。オンにすると、ページの通信の概要なども保存ログに記録されます。普段はオフのままで問題ありません。")
+                // Developer-only: TestFlight/simulator builds (AppVersion.isTestBuild).
+                if AppVersion.isTestBuild {
+                    Section {
+                        Button("ログ") { showSaveLog = true }
+                        Toggle("詳細ログを記録", isOn: Binding(
+                            get: { verboseDiagnostics },
+                            set: {
+                                verboseDiagnostics = $0
+                                DiagnosticsStore.isVerbose = $0
+                            }
+                        ))
+                    } header: {
+                        Text("開発用(TestFlight版のみ)")
+                    } footer: {
+                        Text("不具合の調査用です。オンにすると、ページの通信の概要などもログに記録されます。")
+                    }
                 }
 
                 Section {

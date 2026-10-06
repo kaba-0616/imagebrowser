@@ -19,4 +19,16 @@ enum AppVersion {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         return "v\(version)"
     }
+
+    /// TestFlight installs and simulator runs -- where developer-only
+    /// screens (logs, the verbose-log switch) are shown. App Store installs
+    /// never see them: a regular user has no way to send a log back anyway.
+    /// TestFlight installs carry a sandbox receipt; App Store installs don't.
+    static let isTestBuild: Bool = {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+        #endif
+    }()
 }

@@ -54,7 +54,9 @@ enum DiagnosticsStore {
     static let key = "verboseDiagnostics"
 
     static var isVerbose: Bool {
-        get { UserDefaults.standard.bool(forKey: key) }
+        // Off on App Store installs even if switched on in 1.2.0, when the
+        // switch was still offered there; it now only exists in test builds.
+        get { AppVersion.isTestBuild && UserDefaults.standard.bool(forKey: key) }
         set { UserDefaults.standard.set(newValue, forKey: key) }
     }
 }

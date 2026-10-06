@@ -230,8 +230,11 @@ struct ImageGridView: View {
                         .font(.system(size: 11))
                         .foregroundColor(failed > 0 ? .red : .gray)
                     Spacer()
-                    Button("ログ") { showSaveLog = true }
-                        .font(.system(size: 11))
+                    // Developer-only: TestFlight/simulator builds.
+                    if AppVersion.isTestBuild {
+                        Button("ログ") { showSaveLog = true }
+                            .font(.system(size: 11))
+                    }
                 }
             }
 
