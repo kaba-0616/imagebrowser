@@ -120,7 +120,7 @@ targets:
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
         MARKETING_VERSION: "1.2.1"
-        CURRENT_PROJECT_VERSION: "0.2"
+        CURRENT_PROJECT_VERSION: "0.3"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:

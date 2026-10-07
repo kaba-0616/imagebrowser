@@ -18,11 +18,17 @@ struct TabsView: View {
                                 tabManager.selectTab(tab.id)
                                 onClose()
                             },
-                            onClose: { tabManager.closeTab(tab.id) }
+                            onClose: { tabManager.closeTab(tab.id, keepAtLeastOne: false) }
                         )
                     }
                 }
                 .padding(12)
+            }
+            .overlay {
+                if tabManager.tabs.isEmpty {
+                    Text("タブはありません")
+                        .foregroundColor(.secondary)
+                }
             }
             .navigationTitle("タブ (\(tabManager.tabs.count))")
             .navigationBarTitleDisplayMode(.inline)

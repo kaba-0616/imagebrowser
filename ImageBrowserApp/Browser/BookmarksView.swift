@@ -3,6 +3,8 @@ import SwiftUI
 struct BookmarksView: View {
     @ObservedObject var store: BookmarkStore
     let onSelect: (URL) -> Void
+    /// Opens the bookmark in a new tab and switches to it.
+    let onOpenInNewTab: (URL) -> Void
     let onClose: () -> Void
 
     @State private var renaming: Bookmark?
@@ -49,6 +51,12 @@ struct BookmarksView: View {
                                 .tint(.blue)
                             }
                             .contextMenu {
+                                Button {
+                                    onOpenInNewTab(bookmark.url)
+                                    onClose()
+                                } label: {
+                                    Label("新しいタブで開く", systemImage: "plus.square.on.square")
+                                }
                                 Button {
                                     renaming = bookmark
                                 } label: {

@@ -46,9 +46,10 @@ final class TabManager: ObservableObject {
         restoreOrCreateInitialTabs()
     }
 
+    /// `urlString`: what the new tab opens -- the home page when nil.
     @discardableResult
-    func newTab() -> BrowserTab {
-        let tab = makeTab(loading: BrowserDefaults.homeURL.absoluteString)
+    func newTab(loading urlString: String? = nil) -> BrowserTab {
+        let tab = makeTab(loading: urlString ?? BrowserDefaults.homeURL.absoluteString)
         tabs.append(tab)
         activeTabID = tab.id
         saveState()
@@ -70,19 +71,32 @@ final class TabManager: ObservableObject {
     }
 
     /// Closing the last tab opens a fresh one rather than leaving the
-    /// browser with nothing to show.
-    func closeTab(_ id: BrowserTab.ID) {
+    /// browser with nothing to show -- except from the tab list
+    /// (`keepAtLeastOne: false`), which stays at zero tabs until it's
+    /// dismissed and then calls `ensureTab()` (user request: closing every
+    /// tab there shouldn't make a new one pop up in the list).
+    func closeTab(_ id: BrowserTab.ID, keepAtLeastOne: Bool = true) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs.remove(at: index)
         urlObservers[id] = nil
         if tabs.isEmpty {
-            newTab()
+            if keepAtLeastOne {
+                newTab()
+            } else {
+                activeTabID = nil
+                saveState()
+            }
         } else {
             if activeTabID == id {
                 activeTabID = tabs[min(index, tabs.count - 1)].id
             }
             saveState()
         }
+    }
+
+    /// Opens a fresh tab if every tab was closed from the tab list.
+    func ensureTab() {
+        if tabs.isEmpty { newTab() }
     }
 
     func selectTab(_ id: BrowserTab.ID) {

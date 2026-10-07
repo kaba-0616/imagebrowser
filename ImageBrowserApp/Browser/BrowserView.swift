@@ -26,7 +26,9 @@ struct BrowserView: View {
                 .id(tab.id)
             }
         }
-        .sheet(isPresented: $showTabs) {
+        // Closing every tab in the list leaves zero until the list goes
+        // away (however it's dismissed); only then does a new one open.
+        .sheet(isPresented: $showTabs, onDismiss: { tabManager.ensureTab() }) {
             TabsView(tabManager: tabManager) { showTabs = false }
         }
         .sheet(isPresented: $showSettings) {
@@ -36,6 +38,7 @@ struct BrowserView: View {
             BookmarksView(
                 store: bookmarkStore,
                 onSelect: { url in tabManager.activeTab?.controller.load(urlString: url.absoluteString) },
+                onOpenInNewTab: { url in tabManager.newTab(loading: url.absoluteString) },
                 onClose: { showBookmarks = false }
             )
         }
