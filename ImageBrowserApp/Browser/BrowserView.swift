@@ -143,7 +143,7 @@ private struct BrowserTabContentView: View {
                 pageTitle: controller.pageTitle,
                 pageURL: URL(string: controller.urlString),
                 store: store,
-                loadHistory: controller.canLoadHistory ? { await controller.historyImages() } : nil
+                loadHistory: controller.canLoadHistory ? { progress in await controller.historyImages(progress: progress) } : nil
             ) {
                 showGrid = false
             }

@@ -16,7 +16,8 @@ struct ImageGridView: View {
     @ObservedObject var store: StoreManager
     /// "さかのぼり抽出": every photo the page's own data lists, not just what
     /// was scrolled into view. nil where the page offers no such data.
-    let loadHistory: (() async -> (images: [PageImage], complete: Bool))?
+    /// Takes a callback for the number of messages read so far.
+    let loadHistory: ((@escaping (Int) -> Void) async -> (images: [PageImage], complete: Bool))?
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -29,6 +30,7 @@ struct ImageGridView: View {
     @State private var historyImages: [PageImage]?
     @State private var historyIncomplete = false
     @State private var isLoadingHistory = false
+    @State private var historyReadCount = 0
     @State private var historyMessage: String?
     @State private var showPaywall = false
     @State private var reportFormURL: URL?
@@ -284,7 +286,9 @@ struct ImageGridView: View {
                     } else {
                         Image(systemName: store.isPro ? "clock.arrow.circlepath" : "lock.fill")
                     }
-                    Text(isLoadingHistory ? "さかのぼっています…" : "さかのぼり抽出")
+                    Text(isLoadingHistory
+                         ? (historyReadCount > 0 ? "さかのぼっています… メッセージ\(historyReadCount.formatted())件" : "さかのぼっています…")
+                         : "さかのぼり抽出")
                         .bold()
                     if !store.isPro {
                         Text("Pro")
@@ -301,7 +305,9 @@ struct ImageGridView: View {
             .buttonStyle(.plain)
             .foregroundColor(.white)
             .disabled(isLoadingHistory)
-            Text(historyMessage ?? "スクロールしなくても、このページの過去の画像までまとめて探します")
+            Text(historyMessage ?? (isLoadingHistory
+                                    ? "メッセージの多いトークでは30秒以上かかることがあります"
+                                    : "スクロールしなくても、このページの過去の画像までまとめて探します"))
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
@@ -319,8 +325,9 @@ struct ImageGridView: View {
         guard let loadHistory else { return }
         isLoadingHistory = true
         historyMessage = nil
+        historyReadCount = 0
         Task {
-            let result = await loadHistory()
+            let result = await loadHistory { count in historyReadCount = count }
             isLoadingHistory = false
             if result.images.isEmpty {
                 historyMessage = result.complete
