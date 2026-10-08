@@ -385,9 +385,6 @@ final class WebViewController: NSObject, ObservableObject {
         var waiters: [String: CheckedContinuation<TimelineResult, Never>]
     }
     private var timelineWalks: [String: TimelineWalk] = [:]
-    /// Messages read so far, reported page by page while "さかのぼり抽出"
-    /// waits -- so a long walk shows it's moving rather than looking stuck.
-    private var timelineProgressHandlers: [String: (Int) -> Void] = [:]
     /// Per talk group, so repeated long presses don't re-walk the whole
     /// timeline. Kept 10 minutes -- the signed URLs inside expire.
     private var timelineCache: [String: (at: Date, messages: [TimelineMessage])] = [:]
@@ -484,12 +481,9 @@ final class WebViewController: NSObject, ObservableObject {
 
     /// Every photo in the open talk, oldest first -- not just what has been
     /// scrolled into view. Pro only (enforced by the caller).
-    /// `progress`: messages read so far, called as each page arrives.
-    func historyImages(progress: @escaping (Int) -> Void = { _ in }) async -> (images: [PageImage], complete: Bool) {
+    func historyImages() async -> (images: [PageImage], complete: Bool) {
         guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return ([], true) }
         let started = Date()
-        timelineProgressHandlers[groupID] = progress
-        defer { timelineProgressHandlers[groupID] = nil }
         // Slightly past NetworkTap.js' own 3-minute retry deadline.
         var messages = await fetchTimeline(groupID: groupID, origin: origin, timeout: 190)
         // Cached for up to 10 minutes; signed URLs that ran out in the
@@ -1283,11 +1277,6 @@ extension WebViewController: WKScriptMessageHandler {
             : "画像URLなし"
 
         switch kind {
-        case "timelineProgress":
-            if let groupID = body["groupID"] as? String {
-                timelineProgressHandlers[groupID]?(body["messages"] as? Int ?? 0)
-            }
-            return
         case "timeline":
             guard let groupID = body["groupID"] as? String else { return }
             // May be empty: every caller gave up waiting, but the result is

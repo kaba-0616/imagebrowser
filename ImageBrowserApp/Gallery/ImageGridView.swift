@@ -16,8 +16,7 @@ struct ImageGridView: View {
     @ObservedObject var store: StoreManager
     /// "さかのぼり抽出": every photo the page's own data lists, not just what
     /// was scrolled into view. nil where the page offers no such data.
-    /// Takes a callback for the number of messages read so far.
-    let loadHistory: ((@escaping (Int) -> Void) async -> (images: [PageImage], complete: Bool))?
+    let loadHistory: (() async -> (images: [PageImage], complete: Bool))?
     let onClose: () -> Void
 
     @StateObject private var loader = ImageLoader()
@@ -30,7 +29,6 @@ struct ImageGridView: View {
     @State private var historyImages: [PageImage]?
     @State private var historyIncomplete = false
     @State private var isLoadingHistory = false
-    @State private var historyReadCount = 0
     @State private var historyMessage: String?
     @State private var showPaywall = false
     @State private var reportFormURL: URL?
@@ -97,6 +95,33 @@ struct ImageGridView: View {
         }
     }
 
+    /// Covers the whole result screen while "さかのぼり抽出" walks the talk
+    /// (user request) -- a big talk takes 30s or more.
+    @ViewBuilder
+    private var historyLoadingOverlay: some View {
+        if isLoadingHistory {
+            ZStack {
+                Color.black.opacity(0.6).ignoresSafeArea(edges: .bottom)
+                VStack(spacing: 14) {
+                    ProgressView().scaleEffect(1.4).tint(.white)
+                    Text("さかのぼっています…")
+                        .font(.subheadline)
+                        .foregroundColor(.white)
+                    Text("メッセージの多いトークでは30秒以上かかります。\nアプリを開いたままお待ちください")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(28)
+                .background(RoundedRectangle(cornerRadius: 16).fill(Color(white: 0.16)))
+                .padding(.horizontal, 32)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {}
+            .transition(.opacity)
+        }
+    }
+
     private var mainContent: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -143,6 +168,9 @@ struct ImageGridView: View {
 
                 bottomBar
             }
+            // Inside the NavigationView so "閉じる" stays usable to give up.
+            .overlay(historyLoadingOverlay)
+            .animation(.easeInOut(duration: 0.15), value: isLoadingHistory)
             .background(Color.black.ignoresSafeArea())
             .navigationTitle(pageTitle.isEmpty ? "抽出結果" : pageTitle)
             .navigationBarTitleDisplayMode(.inline)
@@ -286,9 +314,7 @@ struct ImageGridView: View {
                     } else {
                         Image(systemName: store.isPro ? "clock.arrow.circlepath" : "lock.fill")
                     }
-                    Text(isLoadingHistory
-                         ? (historyReadCount > 0 ? "さかのぼっています… メッセージ\(historyReadCount.formatted())件" : "さかのぼっています…")
-                         : "さかのぼり抽出")
+                    Text(isLoadingHistory ? "さかのぼっています…" : "さかのぼり抽出")
                         .bold()
                     if !store.isPro {
                         Text("Pro")
@@ -305,9 +331,7 @@ struct ImageGridView: View {
             .buttonStyle(.plain)
             .foregroundColor(.white)
             .disabled(isLoadingHistory)
-            Text(historyMessage ?? (isLoadingHistory
-                                    ? "メッセージの多いトークでは30秒以上かかることがあります"
-                                    : "スクロールしなくても、このページの過去の画像までまとめて探します"))
+            Text(historyMessage ?? "スクロールしなくても、このページの過去の画像までまとめて探します")
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
@@ -325,9 +349,8 @@ struct ImageGridView: View {
         guard let loadHistory else { return }
         isLoadingHistory = true
         historyMessage = nil
-        historyReadCount = 0
         Task {
-            let result = await loadHistory { count in historyReadCount = count }
+            let result = await loadHistory()
             isLoadingHistory = false
             if result.images.isEmpty {
                 historyMessage = result.complete

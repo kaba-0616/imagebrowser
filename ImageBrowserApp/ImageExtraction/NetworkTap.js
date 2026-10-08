@@ -431,8 +431,6 @@
             get(url, function (json) {
                 pages++;
                 fromTimeline += add(json.messages || []);
-                // 進み具合(読んだ件数だけ)。数千件のトークでは30秒以上かかるため。
-                post({ kind: "timelineProgress", groupID: String(groupID), messages: messages.length, pages: pages });
                 if (json.continuation && pages < 200) { page(json.continuation); return; }
                 past();
             });
