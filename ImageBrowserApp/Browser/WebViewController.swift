@@ -370,9 +370,8 @@ final class WebViewController: NSObject, ObservableObject {
     private var idbFullSizeByKey: [String: URL] = [:]
 
     /// Origin of the site's message API (e.g. `https://api.message.sakurazaka46.com`),
-    /// learned from NetworkTap reports. Set only for hosts starting with
-    /// `api.message.` serving `/v2/...` -- the only API shape the refresh
-    /// below knows how to call.
+    /// learned from NetworkTap reports -- see `isMessageAPI` for which
+    /// responses count.
     private var messageAPIOrigin: String?
     private var pendingRefresh: [String: CheckedContinuation<[String: RefreshedMessage], Never>] = [:]
     private var pendingTimeline: [String: CheckedContinuation<TimelineResult, Never>] = [:]
@@ -541,6 +540,18 @@ final class WebViewController: NSObject, ObservableObject {
     }
 
     /// `/organization/1/talk/timeline/58` -> `58`.
+    /// Responses that mark a host as the message API this file knows how to
+    /// call (`/v2/messages/<id>`, `/v2/groups/<id>/timeline`). Not just
+    /// `api.message.*` hosts: yodel serves the very same API from
+    /// `api.service.yodel-app.com` (seen in its network log), and the host
+    /// check alone kept "さかのぼり抽出" hidden there. The timeline path is
+    /// specific enough to recognize that API on any host.
+    static func isMessageAPI(host: String, path: String) -> Bool {
+        guard path.hasPrefix("/v2/") else { return false }
+        if host.hasPrefix("api.message.") { return true }
+        return path.range(of: #"^/v2/groups/\d+/(timeline|past_messages)$"#, options: .regularExpression) != nil
+    }
+
     private var currentTalkGroupID: String? {
         guard let path = webView.url?.path,
               let range = path.range(of: #"/timeline/(\d+)"#, options: .regularExpression) else { return nil }
@@ -999,7 +1010,7 @@ final class WebViewController: NSObject, ObservableObject {
                 }
                 continue
             }
-            // Not refreshed (no message API on this site, e.g. yodel): the
+            // Not refreshed (message API not seen yet on this page): the
             // page's own URLs, upgraded to full size where known.
             for url in urlsByID[id] ?? [] where !Self.looksLikeVideoPoster(url) {
                 if url.path.contains("/thumbnails/"),
@@ -1331,7 +1342,7 @@ extension WebViewController: WKScriptMessageHandler {
             }
         default:
             if let url = URL(string: rawURL, relativeTo: webView.url)?.absoluteURL,
-               let host = url.host, host.hasPrefix("api.message."), url.path.hasPrefix("/v2/") {
+               let host = url.host, Self.isMessageAPI(host: host, path: url.path) {
                 let origin = "\(url.scheme ?? "https")://\(host)"
                 if messageAPIOrigin != origin {
                     messageAPIOrigin = origin
