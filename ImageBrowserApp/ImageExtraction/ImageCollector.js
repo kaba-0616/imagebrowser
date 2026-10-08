@@ -460,8 +460,19 @@
         }
     }
 
+    // 画面(URL)が変わる直前に呼ぶ: その時点までに読み込まれた写真を拾って
+    // 通信履歴を空にする。拾わずに消すと、トークを開いた直後に別画面へ
+    // 移った場合、そのトークの写真が一度も記録されないまま失われていた
+    // (戻ってもサイトは写真をキャッシュから描くため通信が起きない)。
+    function harvestNetworkImages() {
+        if (isFlutterPage()) { return resourceTimingImages(); }
+        try { performance.clearResourceTimings(); } catch (e) {}
+        return [];
+    }
+
     window.__ImageBrowserCollector = {
         collect: collect,
+        harvestNetworkImages: harvestNetworkImages,
         findImageAt: findImageAt,
         findImageAtDebug: findImageAtDebug,
         isFlutterPage: isFlutterPage,

@@ -245,9 +245,29 @@ final class WebViewController: NSObject, ObservableObject {
         }
         let restored = key.isEmpty ? [:] : (seenByPage[key] ?? [:])
         AppLog.debug("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件を保存、この画面の記録\(restored.count)件を復元)")
+        let previousKey = seenPageKey
         seenNetworkImages = restored
         seenPageKey = key
-        webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
+        // Photos the previous screen loaded but nobody extracted yet go to
+        // that screen's record before the buffer is emptied -- otherwise a
+        // talk left right after opening never had its photos recorded at
+        // all (seen on device: talk -> its call screen -> back found 0).
+        let script = "JSON.stringify(window.__ImageBrowserCollector ? window.__ImageBrowserCollector.harvestNetworkImages() : (performance.clearResourceTimings(), []))"
+        webView.evaluateJavaScript(script) { [weak self] result, _ in
+            guard let self, !previousKey.isEmpty,
+                  let json = result as? String, let data = json.data(using: .utf8),
+                  let urls = try? JSONDecoder().decode([String].self, from: data), !urls.isEmpty else { return }
+            let now = Date()
+            var record = self.seenByPage[previousKey] ?? [:]
+            for case let url? in urls.map(URL.init(string:)) { record[url] = now }
+            self.seenByPage[previousKey] = record
+            // Same screen with only the query changed ("?mode=normal"):
+            // it's the live record too.
+            if previousKey == self.seenPageKey {
+                for (url, at) in record { self.seenNetworkImages[url] = at }
+            }
+            AppLog.debug("画面移動前の通信履歴から写真\(urls.count)件を前の画面の記録へ")
+        }
         requestStorageScan()
         prefetchTimelineIfNeeded()
     }
