@@ -213,9 +213,19 @@ final class WebViewController: NSObject, ObservableObject {
     /// page open and scrolling fetches nothing new (confirmed on device --
     /// zero resource-timing entries after scrolling), so an age limit would
     /// just make every photo silently expire a few minutes in. Instead the
-    /// history is reset whenever the page URL changes (see `observeWebView`),
-    /// which is what actually marks "a different screen" for these sites.
+    /// history is kept per screen (see `seenByPage`) and switched whenever
+    /// the page URL changes (see `observeWebView`), which is what actually
+    /// marks "a different screen" for these sites.
     private var seenNetworkImages: [URL: Date] = [:]
+
+    /// What each screen accumulated, keyed by URL path, so going back to a
+    /// talk brings its photos back. Clearing on every URL change lost them
+    /// for good: on return the site draws already-loaded photos from its own
+    /// cache without fetching them again (seen on device: a talk showed
+    /// 18 photos, then after talk list -> back only the 7 newly scrolled-to
+    /// ones were found).
+    private var seenByPage: [String: [URL: Date]] = [:]
+    private var seenPageKey = ""
 
     /// Clears the page's own resource-timing buffer unconditionally, even
     /// when nothing has been accumulated yet: an earlier version skipped the
@@ -225,8 +235,18 @@ final class WebViewController: NSObject, ObservableObject {
     /// on the timeline picked them up (seen on device).
     private func resetNetworkImageHistory(to newURL: String) {
         let path = URL(string: newURL).map { $0.path + ($0.query.map { "?\($0)" } ?? "") } ?? newURL
-        AppLog.debug("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件をリセット)")
-        seenNetworkImages.removeAll()
+        // Query left out: "?mode=normal" comes and goes on the same talk.
+        let key = URL(string: newURL).map { "\($0.host ?? "")\($0.path)" } ?? ""
+        if !seenPageKey.isEmpty, !seenNetworkImages.isEmpty {
+            seenByPage[seenPageKey] = seenNetworkImages
+        }
+        if seenByPage.count > 30 {
+            seenByPage = seenByPage.filter { $0.key == key }
+        }
+        let restored = key.isEmpty ? [:] : (seenByPage[key] ?? [:])
+        AppLog.debug("ページURL変更: \(path) (蓄積\(seenNetworkImages.count)件を保存、この画面の記録\(restored.count)件を復元)")
+        seenNetworkImages = restored
+        seenPageKey = key
         webView.evaluateJavaScript("performance.clearResourceTimings()", completionHandler: nil)
         requestStorageScan()
         prefetchTimelineIfNeeded()
