@@ -32,6 +32,12 @@ struct ImageGridView: View {
     @State private var historyMessage: String?
     @State private var showPaywall = false
     @State private var reportFormURL: URL?
+    @State private var gridWidth: CGFloat = 0
+    /// Long-press-then-drag selection (like Photos): the cell first touched,
+    /// whether the drag selects or deselects, and the selection before it
+    /// started -- so dragging back shrinks the range again.
+    @State private var dragSelect: (anchor: Int, selecting: Bool, base: Set<Int>)?
+    @State private var dragSelectEndedAt: Date?
 
     /// The history results replace the scrolled-in ones: they're a superset.
     private var sourceImages: [PageImage] { historyImages ?? images }
@@ -207,6 +213,9 @@ struct ImageGridView: View {
                             image: image,
                             isSelected: selected.contains(image.id),
                             onTapImage: {
+                                // The release of a drag selection lands as a
+                                // tap too; it shouldn't open the viewer.
+                                if let ended = dragSelectEndedAt, Date().timeIntervalSince(ended) < 0.4 { return }
                                 fullscreenIndex = index
                                 displayMode = .fullscreen
                             },
@@ -216,7 +225,15 @@ struct ImageGridView: View {
                         .id(image.id)
                     }
                 }
+                .background(GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { gridWidth = geometry.size.width }
+                        .onChange(of: geometry.size.width) { gridWidth = $0 }
+                })
+                .coordinateSpace(name: "grid")
+                .simultaneousGesture(dragSelectGesture)
             }
+            .modifier(ScrollLock(locked: dragSelect != nil))
             .onAppear {
                 guard visibleImages.indices.contains(fullscreenIndex) else { return }
                 let targetID = visibleImages[fullscreenIndex].id
@@ -226,6 +243,43 @@ struct ImageGridView: View {
             }
         }
         .background(Color.black)
+    }
+
+    /// Hold 0.3s, then slide: every cell from the first one touched to the
+    /// one under the finger gets the first cell's new state (user request).
+    private var dragSelectGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("grid")))
+            .onChanged { value in
+                guard case .second(true, let drag?) = value,
+                      let index = gridIndex(at: drag.location) else { return }
+                if dragSelect == nil {
+                    let id = visibleImages[index].id
+                    dragSelect = (index, !selected.contains(id), selected)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
+                guard let drag = dragSelect else { return }
+                var next = drag.base
+                for i in min(drag.anchor, index)...max(drag.anchor, index) {
+                    let id = visibleImages[i].id
+                    if drag.selecting { next.insert(id) } else { next.remove(id) }
+                }
+                if next != selected { selected = next }
+            }
+            .onEnded { _ in
+                if dragSelect != nil { dragSelectEndedAt = Date() }
+                dragSelect = nil
+            }
+    }
+
+    /// The cell under a point in the grid's own coordinates (3 square
+    /// columns, 1pt apart), clamped to the cells that exist.
+    private func gridIndex(at point: CGPoint) -> Int? {
+        guard gridWidth > 0, !visibleImages.isEmpty else { return nil }
+        let pitch = (gridWidth - 2) / 3 + 1
+        let column = min(2, max(0, Int(point.x / pitch)))
+        let row = max(0, Int(point.y / pitch))
+        return min(visibleImages.count - 1, row * 3 + column)
     }
 
     private var fullscreenContent: some View {
@@ -454,5 +508,20 @@ private struct ThumbnailCell: View {
             return "\(image.formatLabel) \(image.width)×\(image.height)"
         }
         return image.formatLabel
+    }
+}
+
+/// Stops the grid scrolling while a drag selection runs, so the finger
+/// selects instead of moving the list. iOS 16+ only (`scrollDisabled`);
+/// on iOS 15 the list may still scroll along.
+private struct ScrollLock: ViewModifier {
+    let locked: Bool
+
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.scrollDisabled(locked)
+        } else {
+            content
+        }
     }
 }
