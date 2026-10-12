@@ -10,6 +10,18 @@ struct BrowserView: View {
     @State private var showBookmarks = false
 
     var body: some View {
+        // Until StoreKit's first entitlement check returns, `isPro` reads
+        // false and the ad banner would flash for a Pro user -- a logo
+        // instead, as in ImageKeeper (user request). The tabs keep loading
+        // behind it: their state objects live on this view either way.
+        if store.hasCheckedEntitlements {
+            browserContent
+        } else {
+            LaunchSplashView()
+        }
+    }
+
+    private var browserContent: some View {
         Group {
             if let tab = tabManager.activeTab {
                 BrowserTabContentView(
@@ -447,5 +459,22 @@ private struct SafariStyleImageMenu: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Shown only for the moment between launch and StoreKit's first
+/// entitlement check (see `BrowserView.body`).
+private struct LaunchSplashView: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 48))
+                .foregroundColor(.accentColor)
+            Text("ImageBrowser")
+                .font(.title2.weight(.semibold))
+            ProgressView()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground).ignoresSafeArea())
     }
 }

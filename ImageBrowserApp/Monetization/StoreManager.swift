@@ -16,6 +16,10 @@ enum ProProduct: String, CaseIterable {
 final class StoreManager: ObservableObject {
 
     @Published private(set) var isPro = false
+    /// `isPro == false` alone can't tell "not Pro" from "the first
+    /// entitlement check hasn't come back yet" -- the launch splash waits on
+    /// this so a Pro user never sees the ad banner flash (same as ImageKeeper).
+    @Published private(set) var hasCheckedEntitlements = false
     @Published private(set) var products: [Product] = []
     @Published private(set) var isLoadingProducts = false
 
@@ -100,6 +104,7 @@ final class StoreManager: ObservableObject {
             }
         }
         isPro = (found || Self.isSimulator) && !proSuppressed
+        hasCheckedEntitlements = true
     }
 
     private func handle(_ verification: VerificationResult<Transaction>) async {
