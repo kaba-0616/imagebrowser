@@ -32,7 +32,6 @@ struct ImageGridView: View {
     @State private var historyMessage: String?
     @State private var showPaywall = false
     @State private var reportFormURL: URL?
-    @State private var gridWidth: CGFloat = 0
     /// Long-press-then-drag selection (like Photos): the cell first touched,
     /// whether the drag selects or deselects, and the selection before it
     /// started -- so dragging back shrinks the range again.
@@ -225,15 +224,11 @@ struct ImageGridView: View {
                         .id(image.id)
                     }
                 }
-                .background(GeometryReader { geometry in
-                    Color.clear
-                        .onAppear { gridWidth = geometry.size.width }
-                        .onChange(of: geometry.size.width) { gridWidth = $0 }
-                })
-                .coordinateSpace(name: "grid")
-                .simultaneousGesture(dragSelectGesture)
+                .background(DragSelectRecognizer(
+                    onChanged: updateDragSelect,
+                    onEnded: endDragSelect
+                ))
             }
-            .modifier(ScrollLock(locked: dragSelect != nil))
             .onAppear {
                 guard visibleImages.indices.contains(fullscreenIndex) else { return }
                 let targetID = visibleImages[fullscreenIndex].id
@@ -247,36 +242,33 @@ struct ImageGridView: View {
 
     /// Hold 0.3s, then slide: every cell from the first one touched to the
     /// one under the finger gets the first cell's new state (user request).
-    private var dragSelectGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.3)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("grid")))
-            .onChanged { value in
-                guard case .second(true, let drag?) = value,
-                      let index = gridIndex(at: drag.location) else { return }
-                if dragSelect == nil {
-                    let id = visibleImages[index].id
-                    dragSelect = (index, !selected.contains(id), selected)
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                }
-                guard let drag = dragSelect else { return }
-                var next = drag.base
-                for i in min(drag.anchor, index)...max(drag.anchor, index) {
-                    let id = visibleImages[i].id
-                    if drag.selecting { next.insert(id) } else { next.remove(id) }
-                }
-                if next != selected { selected = next }
-            }
-            .onEnded { _ in
-                if dragSelect != nil { dragSelectEndedAt = Date() }
-                dragSelect = nil
-            }
+    /// `point` is in the grid's own coordinates, `width` the grid's width.
+    private func updateDragSelect(at point: CGPoint, width: CGFloat) {
+        guard let index = gridIndex(at: point, width: width) else { return }
+        if dragSelect == nil {
+            let id = visibleImages[index].id
+            dragSelect = (index, !selected.contains(id), selected)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+        guard let drag = dragSelect else { return }
+        var next = drag.base
+        for i in min(drag.anchor, index)...max(drag.anchor, index) {
+            let id = visibleImages[i].id
+            if drag.selecting { next.insert(id) } else { next.remove(id) }
+        }
+        if next != selected { selected = next }
+    }
+
+    private func endDragSelect() {
+        if dragSelect != nil { dragSelectEndedAt = Date() }
+        dragSelect = nil
     }
 
     /// The cell under a point in the grid's own coordinates (3 square
     /// columns, 1pt apart), clamped to the cells that exist.
-    private func gridIndex(at point: CGPoint) -> Int? {
-        guard gridWidth > 0, !visibleImages.isEmpty else { return nil }
-        let pitch = (gridWidth - 2) / 3 + 1
+    private func gridIndex(at point: CGPoint, width: CGFloat) -> Int? {
+        guard width > 0, !visibleImages.isEmpty else { return nil }
+        let pitch = (width - 2) / 3 + 1
         let column = min(2, max(0, Int(point.x / pitch)))
         let row = max(0, Int(point.y / pitch))
         return min(visibleImages.count - 1, row * 3 + column)
@@ -511,17 +503,80 @@ private struct ThumbnailCell: View {
     }
 }
 
-/// Stops the grid scrolling while a drag selection runs, so the finger
-/// selects instead of moving the list. iOS 16+ only (`scrollDisabled`);
-/// on iOS 15 the list may still scroll along.
-private struct ScrollLock: ViewModifier {
-    let locked: Bool
+/// The long press behind drag selection, as a UIKit recognizer on the grid's
+/// own UIScrollView rather than a SwiftUI gesture: a SwiftUI drag gesture on
+/// the grid's content swallowed the scroll itself (seen on device, 0.9).
+/// A UIKit long press fails as soon as the finger moves before 0.3s, so a
+/// normal swipe still scrolls; once it has fired, the scroll view's pan
+/// can't start, so sliding selects instead of scrolling.
+private struct DragSelectRecognizer: UIViewRepresentable {
+    let onChanged: (CGPoint, CGFloat) -> Void
+    let onEnded: () -> Void
 
-    func body(content: Content) -> some View {
-        if #available(iOS 16.0, *) {
-            content.scrollDisabled(locked)
-        } else {
-            content
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.isUserInteractionEnabled = false
+        view.coordinator = context.coordinator
+        context.coordinator.anchor = view
+        return view
+    }
+
+    func updateUIView(_ view: AnchorView, context: Context) {
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    final class Coordinator: NSObject {
+        var onChanged: ((CGPoint, CGFloat) -> Void)?
+        var onEnded: (() -> Void)?
+        /// Sits behind the grid with the grid's frame, so locations taken
+        /// in it are grid coordinates whatever the scroll position.
+        weak var anchor: UIView?
+        private weak var scrollView: UIScrollView?
+        private var recognizer: UILongPressGestureRecognizer?
+
+        func attach(to scrollView: UIScrollView) {
+            guard self.scrollView !== scrollView else { return }
+            if let recognizer { recognizer.view?.removeGestureRecognizer(recognizer) }
+            let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(handle(_:)))
+            recognizer.minimumPressDuration = 0.3
+            scrollView.addGestureRecognizer(recognizer)
+            self.recognizer = recognizer
+            self.scrollView = scrollView
+        }
+
+        @objc private func handle(_ recognizer: UILongPressGestureRecognizer) {
+            guard let anchor else { return }
+            switch recognizer.state {
+            case .began, .changed:
+                onChanged?(recognizer.location(in: anchor), anchor.bounds.width)
+            case .ended, .cancelled, .failed:
+                onEnded?()
+            default:
+                break
+            }
+        }
+    }
+
+    /// Finds the enclosing UIScrollView once it's in the hierarchy.
+    final class AnchorView: UIView {
+        weak var coordinator: Coordinator?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                var view = self?.superview
+                while let current = view {
+                    if let scrollView = current as? UIScrollView {
+                        self?.coordinator?.attach(to: scrollView)
+                        return
+                    }
+                    view = current.superview
+                }
+            }
         }
     }
 }
