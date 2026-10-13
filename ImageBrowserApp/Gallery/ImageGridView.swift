@@ -536,6 +536,12 @@ private struct DragSelectRecognizer: UIViewRepresentable {
         weak var anchor: UIView?
         private weak var scrollView: UIScrollView?
         private var recognizer: UILongPressGestureRecognizer?
+        /// Scrolls the grid while the finger rests near its top or bottom
+        /// edge, so a selection can run past what's on screen (user request).
+        private var autoScrollLink: CADisplayLink?
+        private var autoScrollSpeed: CGFloat = 0
+        private let edgeZone: CGFloat = 70
+        private let maxSpeed: CGFloat = 14
 
         func attach(to scrollView: UIScrollView) {
             guard self.scrollView !== scrollView else { return }
@@ -552,11 +558,54 @@ private struct DragSelectRecognizer: UIViewRepresentable {
             switch recognizer.state {
             case .began, .changed:
                 onChanged?(recognizer.location(in: anchor), anchor.bounds.width)
+                updateAutoScroll(for: recognizer)
             case .ended, .cancelled, .failed:
+                stopAutoScroll()
                 onEnded?()
             default:
                 break
             }
+        }
+
+        /// Speed from how deep the finger is in the top/bottom edge zone of
+        /// the visible area: 0 outside it, `maxSpeed` points per frame at
+        /// the very edge.
+        private func updateAutoScroll(for recognizer: UILongPressGestureRecognizer) {
+            guard let scrollView else { return }
+            let y = recognizer.location(in: scrollView).y - scrollView.contentOffset.y
+            let height = scrollView.bounds.height
+            if y < edgeZone {
+                autoScrollSpeed = -maxSpeed * min(1, (edgeZone - y) / edgeZone)
+            } else if y > height - edgeZone {
+                autoScrollSpeed = maxSpeed * min(1, (y - (height - edgeZone)) / edgeZone)
+            } else {
+                autoScrollSpeed = 0
+            }
+            if autoScrollSpeed == 0 {
+                stopAutoScroll()
+            } else if autoScrollLink == nil {
+                let link = CADisplayLink(target: self, selector: #selector(autoScrollTick))
+                link.add(to: .main, forMode: .common)
+                autoScrollLink = link
+            }
+        }
+
+        @objc private func autoScrollTick() {
+            guard let scrollView, let recognizer, let anchor else { stopAutoScroll(); return }
+            let inset = scrollView.adjustedContentInset
+            let minY = -inset.top
+            let maxY = max(minY, scrollView.contentSize.height - scrollView.bounds.height + inset.bottom)
+            let next = min(maxY, max(minY, scrollView.contentOffset.y + autoScrollSpeed))
+            guard next != scrollView.contentOffset.y else { return }
+            scrollView.contentOffset.y = next
+            // The finger hasn't moved but the grid has slid under it.
+            onChanged?(recognizer.location(in: anchor), anchor.bounds.width)
+        }
+
+        private func stopAutoScroll() {
+            autoScrollLink?.invalidate()
+            autoScrollLink = nil
+            autoScrollSpeed = 0
         }
     }
 
