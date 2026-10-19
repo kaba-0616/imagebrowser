@@ -139,6 +139,71 @@
         return !!document.querySelector("flutter-view, flt-glass-pane");
     }
 
+    // --- Instagram(ImageSaverのAction.jsから移植) ---------------------
+    // 投稿は /p/<code>/ と /<ユーザー>/p/<code>/ の両方で開けるので、
+    // ショートコードだけが投稿を特定する。
+    var POST_PATH = /(?:^|\/)(?:p|reel|reels|tv)\/([^\/?#]+)/i;
+
+    function isInstagram() {
+        var host = (document.location.hostname || "").toLowerCase();
+        return host === "instagram.com" || host.slice(-14) === ".instagram.com";
+    }
+
+    function onPostPermalink() {
+        return POST_PATH.test(document.location.pathname);
+    }
+
+    function pageKey(pathname) {
+        var post = POST_PATH.exec(String(pathname || ""));
+        if (post) { return "post:" + post[1]; }
+        var parts = String(pathname || "").split("/");
+        var key = "path:";
+        var kept = 0;
+        for (var i = 0; i < parts.length && kept < 2; i++) {
+            if (!parts[i]) { continue; }
+            key += "/" + parts[i];
+            kept++;
+        }
+        return key;
+    }
+
+    // 投稿ページで、別の投稿(下に並ぶ同じ人の他の投稿)やプロフィールへの
+    // リンクに包まれた画像。URLもサイズも投稿の写真と同じCDN・同じ形式で
+    // 区別できず、何に包まれているかでしか見分けられない。プロフィールや
+    // フィードは全部が別の投稿へのリンクなので、投稿ページに限る。
+    function linksElsewhere(el) {
+        if (!isInstagram() || !onPostPermalink()) { return false; }
+        var link;
+        try { link = el.closest("a[href]"); } catch (e) { return false; }
+        if (!link || !link.href) { return false; }
+        var target;
+        try { target = new URL(link.href, document.baseURI); } catch (e) { return false; }
+        if (target.origin !== document.location.origin) { return true; }
+        return pageKey(target.pathname) !== pageKey(document.location.pathname);
+    }
+
+    // プロフィール・フィードの一覧では、動画・リールのカバーは<video>の無い
+    // 普通の<img>で、目印は近くの<svg aria-label="動画"/"リール動画">だけ
+    // (ImageSaverで実際のマークアップを確認済み)。
+    function instagramVideoCovers(root) {
+        var covers = [];
+        if (!isInstagram() || onPostPermalink()) { return covers; }
+        var icons = root.querySelectorAll("[aria-label]");
+        for (var i = 0; i < icons.length; i++) {
+            var label = icons[i].getAttribute("aria-label") || "";
+            if (!/video|reel|動画|リール|クリップ/i.test(label)) { continue; }
+            var walk = icons[i].parentElement;
+            var found = null;
+            for (var steps = 0; steps < 6 && walk; steps++) {
+                found = walk.querySelector("img");
+                if (found) { break; }
+                walk = walk.parentElement;
+            }
+            if (found && covers.indexOf(found) === -1) { covers.push(found); }
+        }
+        return covers;
+    }
+
     // DOMを一切見ずに、ブラウザが実際に読み込んだ画像のURL一覧を
     // Resource Timing APIから拾う。Canvas描画アプリでは、写真データ自体は
     // 普通にHTTPで取得されて画面に描かれているので、DOM収集の穴を
@@ -256,6 +321,7 @@
                 addURL(videoEls[v].getAttribute("poster"), 0, 0, "video");
             }
 
+            var videoCovers = instagramVideoCovers(root);
             var imgEls = root.querySelectorAll("img");
             for (var i = 0; i < imgEls.length; i++) {
                 var img = imgEls[i];
@@ -263,8 +329,10 @@
                     || bestFromSrcset(img.getAttribute("srcset"))
                     || bestFromSrcset(img.getAttribute("data-srcset"))
                     || fromLazyAttrs(img);
-                addURL(url, img.naturalWidth, img.naturalHeight, "dom");
-                addURL(bestFromSrcset(img.getAttribute("srcset")), 0, 0, "dom");
+                var imgOrigin = linksElsewhere(img) ? "other"
+                    : (videoCovers.indexOf(img) !== -1 ? "video" : "dom");
+                addURL(url, img.naturalWidth, img.naturalHeight, imgOrigin);
+                addURL(bestFromSrcset(img.getAttribute("srcset")), 0, 0, imgOrigin);
             }
 
             var sourceEls = root.querySelectorAll("picture source, video source, audio source");
@@ -355,14 +423,143 @@
         // 画面に出ている写真ではなく、SNS共有用のカバー画像(日向坂46
         // メッセージの/ogp_image.png 1200x638で確認)。結果画面では
         // 「除外した画像」フィルターでだけ見せる。
+        // Instagramのog:imageも同様: 画面遷移しても書き換わらず、別の投稿の
+        // 画像を指していることがある(ImageSaverで確認)。
         var flutter = isFlutterPage();
+        var instagram = isInstagram();
         images.sort(function (a, b) { return a.order - b.order; });
         for (var si = 0; si < images.length; si++) {
             delete images[si].order;
-            if (flutter && images[si].origin === "meta") { images[si].excluded = "cover"; }
+            var o = images[si].origin;
+            if ((flutter || instagram) && o === "meta") { images[si].excluded = "cover"; }
+            if (instagram && o === "other") { images[si].excluded = "other"; }
+            if (instagram && o === "video") { images[si].excluded = "video"; }
         }
         return images;
     }
+
+    // --- カルーセル送り(Instagramの投稿ページのみ) ---------------------
+    // Instagramは表示中のスライドと両隣しかDOMに置かず、残りはページの
+    // どこにも無いので、矢印を押して送るしかない(ImageSaverと同じ方式)。
+    // 共有シートと違ってアプリ内では時間の制約が緩いので、端まで送り切って
+    // から元のスライドへ戻す。
+    var NEXT_LABEL = /^(next|次へ|次の.{0,6})$/i;
+    var PREV_LABEL = /^(prev|previous|back|前へ|戻る|前の.{0,6})$/i;
+    var lastWalkNote = "";
+
+    function containerOf(element) {
+        var container = element.closest("article, [role='dialog'], main, section");
+        if (container) { return container; }
+        var node = element;
+        for (var up = 0; up < 6 && node.parentElement; up++) { node = node.parentElement; }
+        return node;
+    }
+
+    // 矢印ではなく一番大きい画像から探す: 最後のスライドで開くと「次へ」が無い。
+    function galleryScope() {
+        var imgs = document.querySelectorAll("img");
+        var best = null;
+        var bestArea = 0;
+        for (var i = 0; i < imgs.length; i++) {
+            var rect = imgs[i].getBoundingClientRect();
+            var area = rect.width * rect.height;
+            if (area > bestArea) { bestArea = area; best = imgs[i]; }
+        }
+        return best ? containerOf(best) : null;
+    }
+
+    function findControl(pattern, scope) {
+        var candidates = (scope || document).querySelectorAll("[aria-label]");
+        for (var i = 0; i < candidates.length; i++) {
+            var el = candidates[i];
+            if (!pattern.test((el.getAttribute("aria-label") || "").trim())) { continue; }
+            var role = (el.getAttribute("role") || "").toLowerCase();
+            if (el.tagName !== "BUTTON" && role !== "button") { continue; }
+            // リンクは押さない: ページごと移動して抽出が台無しになる。
+            if (el.tagName === "A" || el.closest("a")) { continue; }
+            if (!el.offsetParent) { continue; }
+            return el;
+        }
+        return null;
+    }
+
+    function slideSignature(scope) {
+        var imgs = (scope || document).querySelectorAll("img");
+        var sig = imgs.length + ":";
+        for (var i = 0; i < imgs.length && i < 8; i++) {
+            sig += (imgs[i].currentSrc || imgs[i].src || "").slice(-24) + ",";
+        }
+        return sig;
+    }
+
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+    // 押して、スライドが実際に変わるまで(最大1秒)待つ。変わらなければfalse。
+    async function clickAndSettle(control, scope) {
+        var before = slideSignature(scope);
+        var startPath = document.location.pathname;
+        try { control.click(); } catch (e) { return false; }
+        for (var waited = 0; waited < 1000; waited += 30) {
+            await sleep(30);
+            if (document.location.pathname !== startPath) { return false; }
+            if (slideSignature(scope) !== before) { await sleep(60); return true; }
+        }
+        return false;
+    }
+
+    async function collectAsync(withBackgrounds) {
+        var first = collect(withBackgrounds);
+        lastWalkNote = "";
+        if (!isInstagram() || !onPostPermalink()) { return first; }
+
+        var startedAt = Date.now();
+        var ordered = first.slice();
+        var byURL = {};
+        for (var i = 0; i < first.length; i++) { byURL[first[i].url] = true; }
+        function merge(items, prepend) {
+            var fresh = [];
+            for (var j = 0; j < items.length; j++) {
+                if (byURL[items[j].url]) { continue; }
+                byURL[items[j].url] = true;
+                fresh.push(items[j]);
+            }
+            ordered = prepend ? fresh.concat(ordered) : ordered.concat(fresh);
+            return fresh.length;
+        }
+
+        var scope = galleryScope();
+        var back = 0;
+        var forward = 0;
+        var notes = [];
+        // 先に先頭まで戻る: 途中のスライドで開いた投稿の前半を拾うため。
+        while (back < 40 && Date.now() - startedAt < 12000) {
+            var prev = findControl(PREV_LABEL, scope);
+            if (!prev || !(await clickAndSettle(prev, scope))) { break; }
+            back++;
+            merge(collect(false), true);
+        }
+        while (forward < 60 && Date.now() - startedAt < 24000) {
+            var next = findControl(NEXT_LABEL, null);
+            if (!next || !(await clickAndSettle(next, scope))) { break; }
+            forward++;
+            merge(collect(false), false);
+        }
+        notes.push("戻る" + back + "回・次へ" + forward + "回");
+        // 開いていたスライドへ戻す(送り切った位置から back - forward 枚分)。
+        var restore = forward - back;
+        var restored = 0;
+        while (restored < restore && Date.now() - startedAt < 32000) {
+            var p = findControl(PREV_LABEL, scope);
+            if (!p || !(await clickAndSettle(p, scope))) { break; }
+            restored++;
+        }
+        if (restore > 0) { notes.push("元のスライドへ" + restored + "/" + restore + "枚戻した"); }
+        notes.push((Date.now() - startedAt) + "ms");
+        lastWalkNote = "カルーセル送り: " + notes.join(" / ");
+        return ordered;
+    }
+
+    function walkNote() { return lastWalkNote; }
 
     // 一部サイトは「touchstart(=指が触れた瞬間)」にJSでimgのsrcを本物→
     // 別画像(ロゴ・プレースホルダー等)へすり替え、長押しで検出される頃には
@@ -478,6 +675,8 @@
 
     window.__ImageBrowserCollector = {
         collect: collect,
+        collectAsync: collectAsync,
+        walkNote: walkNote,
         harvestNetworkImages: harvestNetworkImages,
         findImageAt: findImageAt,
         findImageAtDebug: findImageAtDebug,

@@ -13,10 +13,18 @@ enum ImageExtractionBridge {
 
     /// Scans the current page for every image candidate it can find (DOM,
     /// CSS backgrounds, OGP meta, lazy-load attributes, resize-URL originals).
+    /// On an Instagram post this first clicks through the carousel (see
+    /// `collectAsync` in the JS), which takes a few seconds; elsewhere it
+    /// returns straight away.
     static func collect(in webView: WKWebView, withBackgrounds: Bool) async throws -> [PageImage] {
-        let script = "JSON.stringify(window.__ImageBrowserCollector.collect(\(withBackgrounds)))"
-        let result = try await webView.evaluateJavaScript(script)
+        let script = "return JSON.stringify(await window.__ImageBrowserCollector.collectAsync(withBackgrounds))"
+        let result = try await webView.callAsyncJavaScript(
+            script, arguments: ["withBackgrounds": withBackgrounds], contentWorld: .page)
         guard let jsonString = result as? String else { throw ExtractionError.scriptFailed }
+        if let note = try? await webView.evaluateJavaScript("window.__ImageBrowserCollector.walkNote()") as? String,
+           !note.isEmpty {
+            AppLog.log(note)
+        }
         return PageImageDecoding.decode(jsonString: jsonString)
     }
 

@@ -13,7 +13,8 @@ struct PageImage: Identifiable, Hashable, Codable {
     /// Why the result screen hides this image unless its "除外" filter is
     /// on -- "cover" (a Flutter app's og:image) or "video" (a video
     /// message's poster frame), "tutorial"/"splash" (the site's own UI
-    /// pictures). nil for everything shown normally.
+    /// pictures), "other" (on an Instagram post, pictures inside links to
+    /// other posts or profiles). nil for everything shown normally.
     var excluded: String? = nil
 
     var excludedLabel: String? {
@@ -22,6 +23,7 @@ struct PageImage: Identifiable, Hashable, Codable {
         case "video": return "動画のサムネイル"
         case "tutorial": return "操作説明の画像"
         case "splash": return "起動画面のロゴ"
+        case "other": return "別の投稿の画像"
         case nil: return nil
         default: return "除外"
         }
