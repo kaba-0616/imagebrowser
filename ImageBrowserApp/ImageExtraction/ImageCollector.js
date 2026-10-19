@@ -246,14 +246,9 @@
             for (var i = 0; i < entries.length; i++) {
                 var url = entries[i].name;
                 if (!/\.(jpe?g|png|gif|webp)(\?|#|$)/i.test(url)) { continue; }
-                // サイト自身のファビコン・ホーム画面用アイコン(Flutter Web標準の
-                // /icons/Icon-192.png 等)は保存対象ではない。
-                if (/\/favicon\.[a-z]+(\?|#|$)|\/icons\/Icon-(maskable-)?\d+\.png/i.test(url)) { continue; }
-                // メッセージ系アプリ(櫻坂46メッセージ等)の、写真ではない画像:
-                // メンバー/グループのアイコン、自分のプロフィール画像、アプリ設定用画像。
-                // この関数はFlutter製ページでしか使われないので、一般のサイトの
-                // /members/ 等のパスには影響しない。
-                if (/\/(members|groups|users)\/(thumbnails|phone-images)\/|\/app_configs\//i.test(url)) { continue; }
+                // サイト自身のアイコンやメンバー/グループのアイコン、アプリ設定用
+                // 画像も返す。Swift側(WebViewController.siteAssetReason)が
+                // 「除外した画像」へ回す(以前はここで捨てていた)。
                 out.push(url);
             }
             // Swift側(WebViewController)が結果を累積して憶えておくので、
@@ -283,7 +278,9 @@
                 return;
             }
             url = parsed.href;
-            if (UI_ASSET_PATH.test(url)) { return; }
+            // UI部品は捨てずに印を付けて残す: 結果画面の「除外した画像」で
+            // 見られるようにするため(ユーザー要望)。
+            if (UI_ASSET_PATH.test(url)) { origin = "icon"; }
 
             var rendered = null;
             var original = originalOf(parsed) || originalOfQuery(parsed);
@@ -388,11 +385,13 @@
                 var bg = style && style.backgroundImage;
                 if (bg && bg.indexOf("url(") !== -1) {
                     var rect = el.getBoundingClientRect();
-                    if (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX) { continue; }
+                    // アイコン枠の小さい背景(スプライト画像)もアイコン扱いで残す。
+                    var bgOrigin = (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX)
+                        ? "icon" : "background";
                     var re = /url\(["']?([^"')]+)["']?\)/g;
                     var m;
                     while ((m = re.exec(bg)) !== null) {
-                        addURL(m[1], 0, 0, "background");
+                        addURL(m[1], 0, 0, bgOrigin);
                     }
                 }
             }
@@ -434,6 +433,9 @@
             if ((flutter || instagram) && o === "meta") { images[si].excluded = "cover"; }
             if (instagram && o === "other") { images[si].excluded = "other"; }
             if (instagram && o === "video") { images[si].excluded = "video"; }
+            if (o === "icon") {
+                images[si].excluded = /\/splash\/img\//i.test(images[si].url) ? "splash" : "icon";
+            }
         }
         return images;
     }

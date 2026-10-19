@@ -422,7 +422,13 @@ final class WebViewController: NSObject, ObservableObject {
                 excluded: excluded
             )
         }
-        return nonNetwork + networkImages
+        let result = nonNetwork + networkImages
+        var excludedByReason: [String: Int] = [:]
+        for image in result { if let reason = image.excluded { excludedByReason[reason, default: 0] += 1 } }
+        let excludedText = excludedByReason.sorted { $0.value > $1.value }
+            .map { "\($0.key):\($0.value)" }.joined(separator: ", ")
+        AppLog.log("一括抽出の振り分け: 通常\(result.count - excludedByReason.values.reduce(0, +))件 / 除外\(excludedText.isEmpty ? "なし" : excludedText)")
+        return result
     }
 
     /// Full-size (`/files/`) URLs found in the site's own IndexedDB cache,
@@ -661,10 +667,17 @@ final class WebViewController: NSObject, ObservableObject {
     /// `tutorial-contents/` is where the message apps' `/v2/tutorials` API
     /// keeps its how-to pictures (Nogizaka46 and Yodel, both seen in logs);
     /// `splash/img/` is the Flutter template's launch logo.
+    /// The rest are icons: the site's favicon/home-screen icons, member/
+    /// group/user avatars and app-config pictures (dropped outright before
+    /// 0.7; now kept for the filter, user request).
     static func siteAssetReason(_ url: URL) -> String? {
         let path = url.path
         if path.contains("/tutorial-contents/") { return "tutorial" }
         if path.contains("/splash/img/") { return "splash" }
+        if path.range(of: #"/favicon\.[a-z]+$|/icons/Icon-(maskable-)?\d+\.png$|/(members|groups|users)/(thumbnails|phone-images)/|/app_configs/"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil {
+            return "icon"
+        }
         return nil
     }
 

@@ -119,8 +119,10 @@ function checkJSONSafe(images) {
           images.filter(i => i.url.includes("5788a167")).length === 1);
     check("ロゴは書き換えない",
           !byURL["https://sakurazaka46.com/files/14/s46/img/logo.svg"].rendered);
-    check("アイコン枠の背景画像(24x24)は除外される",
-          !byURL[`${H}/ccf/7167e7a550f4f7abd2f5329fe94d2.jpg`]);
+    // 捨てずに「除外した画像」側へ回す(1.3.1 0.7〜)。
+    const sprite = byURL[`${H}/ccf/7167e7a550f4f7abd2f5329fe94d2.jpg`];
+    check("アイコン枠の背景画像(24x24)は除外側に回る",
+          !!sprite && sprite.excluded === "icon");
 }
 
 // ---------------------------------------------------------------------------

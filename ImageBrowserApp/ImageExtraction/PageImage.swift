@@ -24,6 +24,7 @@ struct PageImage: Identifiable, Hashable, Codable {
         case "tutorial": return "操作説明の画像"
         case "splash": return "起動画面のロゴ"
         case "other": return "別の投稿の画像"
+        case "icon": return "アイコン・UI部品"
         case nil: return nil
         default: return "除外"
         }
