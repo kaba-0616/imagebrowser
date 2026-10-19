@@ -351,9 +351,15 @@
             }
         }
 
+        // Flutter製ページは画面をCanvasに描くので、og:image等のメタ画像は
+        // 画面に出ている写真ではなく、SNS共有用のカバー画像(日向坂46
+        // メッセージの/ogp_image.png 1200x638で確認)。結果画面では
+        // 「除外した画像」フィルターでだけ見せる。
+        var flutter = isFlutterPage();
         images.sort(function (a, b) { return a.order - b.order; });
         for (var si = 0; si < images.length; si++) {
             delete images[si].order;
+            if (flutter && images[si].origin === "meta") { images[si].excluded = "cover"; }
         }
         return images;
     }

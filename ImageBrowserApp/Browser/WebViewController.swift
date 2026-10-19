@@ -334,15 +334,18 @@ final class WebViewController: NSObject, ObservableObject {
         // Video messages' images are just poster frames. The API's type is
         // authoritative; the filename pattern only covers messages the API
         // wasn't asked about.
-        let beforeVideoFilter = baseCandidates.count
-        baseCandidates.removeAll { url in
+        // Kept aside rather than dropped: the result screen's "除外" filter
+        // still lists them.
+        let videoPosters = baseCandidates.filter { url in
             if let id = Self.messageID(of: url), refreshedIDs.contains(id) {
                 return videoMessageIDs.contains(id)
             }
             return Self.looksLikeVideoPoster(url)
         }
-        if beforeVideoFilter != baseCandidates.count {
-            AppLog.log("動画のサムネイルを除外: \(beforeVideoFilter - baseCandidates.count)件")
+        if !videoPosters.isEmpty {
+            let posterSet = Set(videoPosters)
+            baseCandidates.removeAll { posterSet.contains($0) }
+            AppLog.log("動画のサムネイルを除外: \(videoPosters.count)件")
         }
 
         var upgradedFromAPI = 0
@@ -377,8 +380,9 @@ final class WebViewController: NSObject, ObservableObject {
         AppLog.debug("端末内キャッシュのフルサイズURL: \(cachedFiles.count)件(期限内\(validCached.count)件・期限切れ\(cachedFiles.count - validCached.count)件)")
         AppLog.debug("抽出対象の画像URL一覧: \(candidates.map { Self.shortPath($0.url) }.joined(separator: ", "))")
 
-        let networkImages = candidates.map { candidate -> PageImage in
-            let url = candidate.url
+        let networkImages = (candidates.map { ($0.url, $0.rendered, nil as String?) }
+                             + videoPosters.map { ($0, nil as URL?, "video" as String?) })
+            .map { url, rendered, excluded -> PageImage in
             // A stable id per URL (not a running counter) so the same photo
             // keeps the same id across repeated extractions -- that's what
             // PhotoSaver.savedImageIDs/the grid's selection state key on, and
@@ -393,7 +397,8 @@ final class WebViewController: NSObject, ObservableObject {
                 // The thumbnail actually shown on screen stays as
                 // renderedURL: ImageLoader uses it for the grid preview, and
                 // PhotoSaver falls back to it if the full-size fetch fails.
-                url: url, width: 0, height: 0, renderedURL: candidate.rendered, origin: "network"
+                url: url, width: 0, height: 0, renderedURL: rendered, origin: "network",
+                excluded: excluded
             )
         }
         return nonNetwork + networkImages

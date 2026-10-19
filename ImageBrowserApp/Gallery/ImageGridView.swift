@@ -5,6 +5,23 @@ enum DisplayMode: String, CaseIterable {
     case fullscreen = "フルスクリーン"
 }
 
+/// Which part of the result the screen lists (user request): normally
+/// neither what was already saved nor what extraction set aside, but both
+/// stay reachable -- and savable -- from here.
+enum GridFilter: String, CaseIterable {
+    case normal = "通常"
+    case saved = "保存済み"
+    case excluded = "除外した画像"
+
+    var systemImage: String {
+        switch self {
+        case .normal: return "photo.on.rectangle"
+        case .saved: return "checkmark.circle"
+        case .excluded: return "eye.slash"
+        }
+    }
+}
+
 /// Bulk-extraction result screen: sourceOnly/meta/background-only images are
 /// mixed in without ImageSaver's site-specific exclusion heuristics --
 /// those were tuned against a handful of known sites and don't belong in a
@@ -24,6 +41,7 @@ struct ImageGridView: View {
 
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
+    @State private var filter: GridFilter = .normal
     @State private var fullscreenIndex: Int = 0
     @State private var showSaveLog = false
     @State private var historyImages: [PageImage]?
@@ -42,7 +60,16 @@ struct ImageGridView: View {
     private var sourceImages: [PageImage] { historyImages ?? images }
 
     private var visibleImages: [PageImage] {
-        sourceImages.filter { !photoSaver.savedImageIDs.contains($0.id) }
+        images(for: filter)
+    }
+
+    private func images(for filter: GridFilter) -> [PageImage] {
+        let saved = photoSaver.savedImageIDs
+        switch filter {
+        case .normal: return sourceImages.filter { $0.excluded == nil && !saved.contains($0.id) }
+        case .saved: return sourceImages.filter { saved.contains($0.id) }
+        case .excluded: return sourceImages.filter { $0.excluded != nil && !saved.contains($0.id) }
+        }
     }
 
     private var selectedVisible: [PageImage] {
@@ -186,6 +213,9 @@ struct ImageGridView: View {
                 // For results that are there but incomplete (e.g. some
                 // photos missing) -- the empty screen has its own button.
                 ToolbarItem(placement: .navigationBarTrailing) {
+                    filterMenu
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: openReportForm) {
                         Image(systemName: "exclamationmark.bubble")
                     }
@@ -194,6 +224,23 @@ struct ImageGridView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var filterMenu: some View {
+        Menu {
+            Picker("表示する画像", selection: $filter) {
+                ForEach(GridFilter.allCases, id: \.self) { option in
+                    Label("\(option.rawValue)(\(images(for: option).count))", systemImage: option.systemImage)
+                        .tag(option)
+                }
+            }
+        } label: {
+            Image(systemName: filter == .normal
+                  ? "line.3.horizontal.decrease.circle"
+                  : "line.3.horizontal.decrease.circle.fill")
+        }
+        .accessibilityLabel("表示する画像")
+        .onChange(of: filter) { _ in fullscreenIndex = 0 }
     }
 
     /// Same in-app form as Settings > お問い合わせ, with this page's URL
@@ -344,8 +391,15 @@ struct ImageGridView: View {
     }
 
     private var emptyMessage: String {
+        switch filter {
+        case .saved: return "保存した画像はまだありません"
+        case .excluded: return "除外した画像はありません"
+        case .normal: break
+        }
         if sourceImages.isEmpty { return "画像が見つかりませんでした" }
         if sourceImages.allSatisfy({ photoSaver.savedImageIDs.contains($0.id) }) { return "すべて保存しました" }
+        let excludedCount = images(for: .excluded).count
+        if excludedCount > 0 { return "画像が見つかりませんでした\n(除外した画像が\(excludedCount)件あります。右上のメニューから表示できます)" }
         return "画像が見つかりませんでした"
     }
 

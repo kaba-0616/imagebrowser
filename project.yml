@@ -118,10 +118,11 @@ targets:
         # 1.1.1(仮番号、ビルド1〜14)に新機能が入ったため、配信直前に1.2.0へ付け替えた。
         # 1.2.0は2026-10-06に公開。1.2.1は次版の仮番号(開発ビルド0.1〜0.12)で、
         # 新機能(なぞり選択など)が入ったため、2026-10-14の審査提出時に1.3.0ビルド1へ付け替えた。
+        # 1.3.0は2026-10-15に公開。1.3.1は次版の仮番号(ビルド0.1〜)。
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
-        MARKETING_VERSION: "1.3.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.3.1"
+        CURRENT_PROJECT_VERSION: "0.1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:

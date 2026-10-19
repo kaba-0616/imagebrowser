@@ -10,6 +10,19 @@ struct PageImage: Identifiable, Hashable, Codable {
     let renderedURL: URL?
     /// "dom" | "video" | "meta" | "background". Feed into filtering later if needed.
     let origin: String
+    /// Why the result screen hides this image unless its "除外" filter is
+    /// on -- "cover" (a Flutter app's og:image) or "video" (a video
+    /// message's poster frame). nil for everything shown normally.
+    var excluded: String? = nil
+
+    var excludedLabel: String? {
+        switch excluded {
+        case "cover": return "カバー画像"
+        case "video": return "動画のサムネイル"
+        case nil: return nil
+        default: return "除外"
+        }
+    }
 
     var formatLabel: String {
         switch url.pathExtension.lowercased() {
@@ -36,6 +49,7 @@ private struct RawImage: Decodable {
     let height: Double?
     let rendered: URL?
     let origin: String?
+    let excluded: String?
 }
 
 enum PageImageDecoding {
@@ -49,7 +63,8 @@ enum PageImageDecoding {
                 width: Int(item.width ?? 0),
                 height: Int(item.height ?? 0),
                 renderedURL: item.rendered,
-                origin: item.origin ?? "dom"
+                origin: item.origin ?? "dom",
+                excluded: item.excluded
             )
         }
     }
