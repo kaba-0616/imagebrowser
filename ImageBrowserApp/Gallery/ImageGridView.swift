@@ -5,27 +5,34 @@ enum DisplayMode: String, CaseIterable {
     case fullscreen = "フルスクリーン"
 }
 
-/// Which part of the result the screen lists (user request): normally
-/// neither what was already saved nor what extraction set aside, but both
-/// stay reachable -- and savable -- from here.
-enum GridFilter: String, CaseIterable {
-    case normal = "通常"
-    case saved = "保存済み"
-    case excluded = "除外した画像"
+/// Same tiers as ImageSaver's result screen.
+enum SizeFilter: Int, CaseIterable, Identifiable {
+    case all = 0
+    case medium = 1
+    case large = 2
 
-    var systemImage: String {
+    var id: Int { rawValue }
+
+    var minimumPixels: Int {
         switch self {
-        case .normal: return "photo.on.rectangle"
-        case .saved: return "checkmark.circle"
-        case .excluded: return "eye.slash"
+        case .all: return 0
+        case .medium: return 300
+        case .large: return 650
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .all: return "すべて表示"
+        case .medium: return "小を除外 (300px未満)"
+        case .large: return "中・小を除外 (650px未満)"
         }
     }
 }
 
-/// Bulk-extraction result screen: sourceOnly/meta/background-only images are
-/// mixed in without ImageSaver's site-specific exclusion heuristics --
-/// those were tuned against a handful of known sites and don't belong in a
-/// general-purpose browser's MVP.
+/// Bulk-extraction result screen. Filters work like ImageSaver's: images
+/// tagged at extraction (PageImage.excluded) or measured as icons/banners
+/// are hidden until switched on from the menu.
 struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
@@ -41,7 +48,22 @@ struct ImageGridView: View {
 
     @State private var selected: Set<Int> = []
     @State private var displayMode: DisplayMode = .grid
-    @State private var filter: GridFilter = .normal
+    /// The filter menu, laid out like ImageSaver's (user request): a size
+    /// tier remembered between launches, then one switch per kind of image
+    /// hidden by default. Each kind is something "the pictures on this page"
+    /// doesn't mean -- see PageImage.excluded for where the tags come from.
+    @AppStorage("sizeFilter") private var storedSizeFilter = SizeFilter.all.rawValue
+    @State private var includeSaved = false
+    @State private var includeOtherPosts = false
+    @State private var includeVideoPosters = false
+    @State private var includeMetaImages = false
+    @State private var includeTutorials = false
+    @State private var includeSplash = false
+    /// Both the tagged UI pictures and anything measured at 200px or less.
+    @State private var includeIcons = false
+    /// Four times longer than deep: a banner, a rule or a header.
+    @State private var includeBanners = false
+    @State private var includeFailed = false
     @State private var fullscreenIndex: Int = 0
     @State private var showSaveLog = false
     @State private var historyImages: [PageImage]?
@@ -59,16 +81,98 @@ struct ImageGridView: View {
     /// The history results replace the scrolled-in ones: they're a superset.
     private var sourceImages: [PageImage] { historyImages ?? images }
 
-    private var visibleImages: [PageImage] {
-        images(for: filter)
+    private var sizeFilter: SizeFilter {
+        SizeFilter(rawValue: storedSizeFilter) ?? .all
     }
 
-    private func images(for filter: GridFilter) -> [PageImage] {
-        let saved = photoSaver.savedImageIDs
-        switch filter {
-        case .normal: return sourceImages.filter { $0.excluded == nil && !saved.contains($0.id) }
-        case .saved: return sourceImages.filter { saved.contains($0.id) }
-        case .excluded: return sourceImages.filter { $0.excluded != nil && !saved.contains($0.id) }
+    private var visibleImages: [PageImage] {
+        sourceImages.filter { image in
+            guard includeSaved || !photoSaver.savedImageIDs.contains(image.id) else { return false }
+            guard includeOtherPosts || image.excluded != "other" else { return false }
+            guard includeVideoPosters || image.excluded != "video" else { return false }
+            guard includeMetaImages || image.excluded != "cover" else { return false }
+            guard includeTutorials || image.excluded != "tutorial" else { return false }
+            guard includeSplash || image.excluded != "splash" else { return false }
+            guard includeIcons || !isIcon(image) else { return false }
+            guard includeBanners || !isBanner(image) else { return false }
+            guard includeFailed || !loader.failed.contains(image.id) else { return false }
+            guard sizeFilter != .all else { return true }
+            let known = longestSide(of: image)
+            return known == 0 || known >= sizeFilter.minimumPixels
+        }
+    }
+
+    /// Unsaved images of one kind -- the count on its menu switch.
+    private func count(_ matches: (PageImage) -> Bool) -> Int {
+        sourceImages.filter { matches($0) && !photoSaver.savedImageIDs.contains($0.id) }.count
+    }
+
+    private var savedCount: Int { sourceImages.filter { photoSaver.savedImageIDs.contains($0.id) }.count }
+    private var otherPostCount: Int { count { $0.excluded == "other" } }
+    private var videoPosterCount: Int { count { $0.excluded == "video" } }
+    private var metaImageCount: Int { count { $0.excluded == "cover" } }
+    private var tutorialCount: Int { count { $0.excluded == "tutorial" } }
+    private var splashCount: Int { count { $0.excluded == "splash" } }
+    private var iconCount: Int { count(isIcon) }
+    private var bannerCount: Int { count(isBanner) }
+    private var failedCount: Int { count { loader.failed.contains($0.id) } }
+
+    private var hasHiddenImages: Bool {
+        sizeFilter != .all
+            || (!includeSaved && savedCount > 0)
+            || (!includeOtherPosts && otherPostCount > 0)
+            || (!includeVideoPosters && videoPosterCount > 0)
+            || (!includeMetaImages && metaImageCount > 0)
+            || (!includeTutorials && tutorialCount > 0)
+            || (!includeSplash && splashCount > 0)
+            || (!includeIcons && iconCount > 0)
+            || (!includeBanners && bannerCount > 0)
+            || (!includeFailed && failedCount > 0)
+    }
+
+    /// The real pixel size from the downloaded file where there is one: many
+    /// images come from tags that carry no dimensions (ImageSaver).
+    private func longestSide(of image: PageImage) -> Int {
+        if let pixels = loader.trueSize(of: image) {
+            return Int(max(pixels.width, pixels.height))
+        }
+        return max(image.width, image.height)
+    }
+
+    /// Longest side of 200px or less, by the real size where it is known. An
+    /// unmeasured image (0) is never called an icon: it shows, gets measured
+    /// when its tile appears, and only then drops out.
+    private static let iconMaxSide = 200
+
+    private func isIcon(_ image: PageImage) -> Bool {
+        if image.excluded == "icon" { return true }
+        let side = longestSide(of: image)
+        return side > 0 && side <= Self.iconMaxSide
+    }
+
+    /// Read from the thumbnail where there is one: resizing keeps the shape.
+    private func isBanner(_ image: PageImage) -> Bool {
+        var width = Double(image.width)
+        var height = Double(image.height)
+        if let measured = loader.pixelSizes[image.id] {
+            width = Double(measured.width)
+            height = Double(measured.height)
+        }
+        guard width > 0, height > 0 else { return false }
+        return max(width / height, height / width) >= 4
+    }
+
+    /// Measures the images the size filter is hiding: a hidden cell never
+    /// appears, so it never gets measured otherwise (ImageSaver). Delayed so
+    /// it doesn't race the visible grid's own downloads.
+    private func scheduleMeasureIfFiltering() {
+        guard sizeFilter != .all else { return }
+        let visibleIDs = Set(visibleImages.map(\.id))
+        let hidden = sourceImages.filter { !visibleIDs.contains($0.id) }
+        guard !hidden.isEmpty else { return }
+        Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            for image in hidden { loader.requestThumbnail(for: image) }
         }
     }
 
@@ -228,19 +332,59 @@ struct ImageGridView: View {
 
     private var filterMenu: some View {
         Menu {
-            Picker("表示する画像", selection: $filter) {
-                ForEach(GridFilter.allCases, id: \.self) { option in
-                    Label("\(option.rawValue)(\(images(for: option).count))", systemImage: option.systemImage)
-                        .tag(option)
+            ForEach(SizeFilter.allCases) { option in
+                Button {
+                    storedSizeFilter = option.rawValue
+                } label: {
+                    if option == sizeFilter {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
                 }
             }
+
+            Divider()
+
+            // Always listed, even at zero: a missing entry would look like
+            // the scan never checked for that kind.
+            filterToggle("保存済みの画像", count: savedCount, isOn: $includeSaved)
+            filterToggle("別の投稿の画像", count: otherPostCount, isOn: $includeOtherPosts)
+            filterToggle("動画のサムネイル", count: videoPosterCount, isOn: $includeVideoPosters)
+            filterToggle("ページ情報の画像", count: metaImageCount, isOn: $includeMetaImages)
+            filterToggle("操作説明の画像", count: tutorialCount, isOn: $includeTutorials)
+            filterToggle("起動画面のロゴ", count: splashCount, isOn: $includeSplash)
+            filterToggle("横長のバナー画像", count: bannerCount, isOn: $includeBanners)
+            filterToggle("小さなアイコン類", count: iconCount, isOn: $includeIcons)
+            filterToggle("読み込みに失敗した画像", count: failedCount, isOn: $includeFailed)
         } label: {
-            Image(systemName: filter == .normal
-                  ? "line.3.horizontal.decrease.circle"
-                  : "line.3.horizontal.decrease.circle.fill")
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(hasHiddenImages ? .body.bold() : .body)
         }
         .accessibilityLabel("表示する画像")
-        .onChange(of: filter) { _ in fullscreenIndex = 0 }
+        .onChange(of: storedSizeFilter) { _ in
+            fullscreenIndex = 0
+            scheduleMeasureIfFiltering()
+        }
+        .onAppear { scheduleMeasureIfFiltering() }
+    }
+
+    @ViewBuilder
+    private func filterToggle(_ name: String, count: Int, isOn: Binding<Bool>) -> some View {
+        if count > 0 {
+            Button {
+                isOn.wrappedValue.toggle()
+                fullscreenIndex = 0
+            } label: {
+                if isOn.wrappedValue {
+                    Label("\(name)も表示 (\(count)件)", systemImage: "checkmark")
+                } else {
+                    Text("\(name)も表示 (\(count)件)")
+                }
+            }
+        } else {
+            Text("\(name): なし")
+        }
     }
 
     /// Same in-app form as Settings > お問い合わせ, with this page's URL
@@ -391,15 +535,10 @@ struct ImageGridView: View {
     }
 
     private var emptyMessage: String {
-        switch filter {
-        case .saved: return "保存した画像はまだありません"
-        case .excluded: return "除外した画像はありません"
-        case .normal: break
-        }
         if sourceImages.isEmpty { return "画像が見つかりませんでした" }
         if sourceImages.allSatisfy({ photoSaver.savedImageIDs.contains($0.id) }) { return "すべて保存しました" }
-        let excludedCount = images(for: .excluded).count
-        if excludedCount > 0 { return "画像が見つかりませんでした\n(除外した画像が\(excludedCount)件あります。右上のメニューから表示できます)" }
+        // Found plenty, the filters are holding it back: point at the menu.
+        if hasHiddenImages { return "表示できる画像がありません\n右上のメニューで隠している画像を表示できます" }
         return "画像が見つかりませんでした"
     }
 
