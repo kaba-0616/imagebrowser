@@ -52,18 +52,20 @@ struct ImageGridView: View {
     /// tier remembered between launches, then one switch per kind of image
     /// hidden by default. Each kind is something "the pictures on this page"
     /// doesn't mean -- see PageImage.excluded for where the tags come from.
+    /// Every switch is remembered between launches, not only the size tier
+    /// (user request: re-setting them on every extraction was a chore).
     @AppStorage("sizeFilter") private var storedSizeFilter = SizeFilter.all.rawValue
-    @State private var includeSaved = false
-    @State private var includeOtherPosts = false
-    @State private var includeVideoPosters = false
-    @State private var includeMetaImages = false
-    @State private var includeTutorials = false
-    @State private var includeSplash = false
+    @AppStorage("gridFilter.includeSaved") private var includeSaved = false
+    @AppStorage("gridFilter.includeOtherPosts") private var includeOtherPosts = false
+    @AppStorage("gridFilter.includeVideoPosters") private var includeVideoPosters = false
+    @AppStorage("gridFilter.includeMetaImages") private var includeMetaImages = false
+    @AppStorage("gridFilter.includeTutorials") private var includeTutorials = false
+    @AppStorage("gridFilter.includeSplash") private var includeSplash = false
     /// Both the tagged UI pictures and anything measured at 200px or less.
-    @State private var includeIcons = false
+    @AppStorage("gridFilter.includeIcons") private var includeIcons = false
     /// Four times longer than deep: a banner, a rule or a header.
-    @State private var includeBanners = false
-    @State private var includeFailed = false
+    @AppStorage("gridFilter.includeBanners") private var includeBanners = false
+    @AppStorage("gridFilter.includeFailed") private var includeFailed = false
     @State private var fullscreenIndex: Int = 0
     @State private var showSaveLog = false
     @State private var historyImages: [PageImage]?
