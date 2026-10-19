@@ -99,7 +99,7 @@ private struct TabCell: View {
                 .frame(height: 100)
                 .clipped()
 
-                Text(controller.urlString)
+                Text(controller.urlString.isEmpty ? controller.lastLoadedURL : controller.urlString)
                     .font(.caption2)
                     .lineLimit(1)
                     .foregroundColor(.secondary)

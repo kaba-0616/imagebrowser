@@ -19,6 +19,12 @@ final class WebViewController: NSObject, ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var estimatedProgress: Double = 0
     @Published private(set) var pageTitle: String = ""
+    /// The last non-empty `urlString`. When iOS ends the tab's web content
+    /// process (seen in logs: several message-app tabs lost their URL in
+    /// the same second while the app was in use), `webView.url` and
+    /// `title` go empty and the tab list showed "新しいタブ" with no
+    /// address, though selecting the tab still brings the page back.
+    @Published private(set) var lastLoadedURL: String = ""
     /// A snapshot of the page, refreshed after each load finishes -- used by
     /// TabsView's grid so each cell shows the actual site instead of a
     /// generic placeholder icon.
@@ -799,6 +805,7 @@ final class WebViewController: NSObject, ObservableObject {
                     let newURL = webView.url?.absoluteString ?? ""
                     if newURL != self.urlString { self.resetNetworkImageHistory(to: newURL) }
                     self.urlString = newURL
+                    if !newURL.isEmpty { self.lastLoadedURL = newURL }
                 }
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] webView, _ in
@@ -814,7 +821,13 @@ final class WebViewController: NSObject, ObservableObject {
                 Task { @MainActor in self?.estimatedProgress = webView.estimatedProgress }
             },
             webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
-                Task { @MainActor in self?.pageTitle = webView.title ?? "" }
+                Task { @MainActor in
+                    // Keep the old title when the page is gone rather than
+                    // replaced (see `lastLoadedURL`).
+                    let title = webView.title ?? ""
+                    if title.isEmpty && webView.url == nil { return }
+                    self?.pageTitle = title
+                }
             }
         ]
     }
