@@ -29,7 +29,10 @@ struct BrowserView: View {
                     store: store,
                     bookmarkStore: bookmarkStore,
                     tabCount: tabManager.tabs.count,
-                    onShowTabs: { showTabs = true },
+                    onShowTabs: {
+                        tabManager.activeTab?.controller.refreshThumbnail()
+                        showTabs = true
+                    },
                     onShowSettings: { showSettings = true },
                     onShowBookmarks: { showBookmarks = true }
                 )

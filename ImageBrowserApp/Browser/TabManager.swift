@@ -1,12 +1,15 @@
 import Foundation
 import Combine
 import WebKit
+import UIKit
 
 /// A single browser tab: an identity plus its own WKWebView-owning controller.
 /// Each tab keeps its own navigation history and page state independently.
 @MainActor
 final class BrowserTab: ObservableObject, Identifiable {
     let id = UUID()
+    /// Survives relaunches (unlike `id`): names the tab's saved thumbnail.
+    let persistentID: String
     let controller: WebViewController
     /// The last URL this tab was known to show -- what saveState() falls
     /// back to while `webView.url` is nil, instead of the home page.
@@ -14,18 +17,20 @@ final class BrowserTab: ObservableObject, Identifiable {
     /// So a tab whose URL stays nil is logged once, not on every save.
     var loggedMissingURL = false
 
-    init() {
+    init(persistentID: String = UUID().uuidString) {
+        self.persistentID = persistentID
         controller = WebViewController()
     }
 
     /// For a tab created by promoting a `window.open()`/`target="_blank"`
     /// popup -- see `TabManager.openTab(wrapping:)`.
     init(wrapping webView: WKWebView) {
+        persistentID = UUID().uuidString
         controller = WebViewController(popupWebView: webView)
     }
 }
 
-/// Simple tab set: open/close/switch only, no thumbnails or tab-group UI.
+/// Simple tab set: open/close/switch only, no tab-group UI.
 /// Persists the open tabs' URLs across app restarts -- without this, force-
 /// quitting the app (the normal way anyone closes an app) silently threw
 /// away whatever the user had open and dropped them back on the home page.
@@ -37,6 +42,22 @@ final class TabManager: ObservableObject {
     private var urlObservers: [BrowserTab.ID: AnyCancellable] = [:]
     private static let savedURLsKey = "savedTabURLs"
     private static let savedActiveIndexKey = "savedActiveTabIndex"
+    private static let savedIDsKey = "savedTabIDs"
+    private static let savedTitlesKey = "savedTabTitles"
+    private var titleObservers: [BrowserTab.ID: AnyCancellable] = [:]
+
+    /// One JPEG per tab, named by `BrowserTab.persistentID`. Caches, not
+    /// Documents: losing them only costs the tab list its pictures.
+    private static let thumbnailDirectory: URL = {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("TabThumbnails", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private static func thumbnailURL(for persistentID: String) -> URL {
+        thumbnailDirectory.appendingPathComponent("\(persistentID).jpg")
+    }
 
     var activeTab: BrowserTab? {
         tabs.first { $0.id == activeTabID }
@@ -77,8 +98,10 @@ final class TabManager: ObservableObject {
     /// tab there shouldn't make a new one pop up in the list).
     func closeTab(_ id: BrowserTab.ID, keepAtLeastOne: Bool = true) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
-        tabs.remove(at: index)
+        let closed = tabs.remove(at: index)
         urlObservers[id] = nil
+        titleObservers[id] = nil
+        try? FileManager.default.removeItem(at: Self.thumbnailURL(for: closed.persistentID))
         if tabs.isEmpty {
             if keepAtLeastOne {
                 newTab()
@@ -104,8 +127,8 @@ final class TabManager: ObservableObject {
         saveState()
     }
 
-    private func makeTab(loading urlString: String) -> BrowserTab {
-        let tab = BrowserTab()
+    private func makeTab(loading urlString: String, persistentID: String = UUID().uuidString) -> BrowserTab {
+        let tab = BrowserTab(persistentID: persistentID)
         tab.lastKnownURL = urlString
         tab.controller.load(urlString: urlString)
         wireTab(tab)
@@ -122,6 +145,19 @@ final class TabManager: ObservableObject {
         urlObservers[tab.id] = tab.controller.$urlString
             .dropFirst()
             .sink { [weak self] _ in self?.saveState() }
+        titleObservers[tab.id] = tab.controller.$pageTitle
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                // The published value lands after this sink runs.
+                DispatchQueue.main.async { self?.saveState() }
+            }
+        let persistentID = tab.persistentID
+        tab.controller.onThumbnailCaptured = { image in
+            DispatchQueue.global(qos: .utility).async {
+                try? image.jpegData(compressionQuality: 0.6)?.write(to: Self.thumbnailURL(for: persistentID), options: .atomic)
+            }
+        }
         tab.controller.onOpenTab = { [weak self] popupWebView in
             self?.openTab(wrapping: popupWebView)
         }
@@ -144,8 +180,18 @@ final class TabManager: ObservableObject {
         let hosts = savedURLs.map { URL(string: $0)?.host ?? "?" }
         AppLog.log("タブ復元: \(savedURLs.count)件(ホーム\(savedURLs.filter { $0 == home }.count)件) \(hosts.joined(separator: ", "))")
 
-        let restored = savedURLs.map { makeTab(loading: $0) }
+        let savedIDs = UserDefaults.standard.stringArray(forKey: Self.savedIDsKey) ?? []
+        let savedTitles = UserDefaults.standard.stringArray(forKey: Self.savedTitlesKey) ?? []
+        let restored = savedURLs.enumerated().map { index, url -> BrowserTab in
+            let persistentID = savedIDs.indices.contains(index) ? savedIDs[index] : UUID().uuidString
+            let tab = makeTab(loading: url, persistentID: persistentID)
+            let title = savedTitles.indices.contains(index) ? savedTitles[index] : ""
+            let thumbnail = UIImage(contentsOfFile: Self.thumbnailURL(for: persistentID).path)
+            tab.controller.restoreDisplay(title: title, thumbnail: thumbnail)
+            return tab
+        }
         tabs = restored
+        pruneThumbnails(keeping: Set(restored.map(\.persistentID)))
         let savedIndex = UserDefaults.standard.integer(forKey: Self.savedActiveIndexKey)
         activeTabID = restored.indices.contains(savedIndex) ? restored[savedIndex].id : restored.first?.id
     }
@@ -178,7 +224,17 @@ final class TabManager: ObservableObject {
             return tab.lastKnownURL ?? BrowserDefaults.homeURL.absoluteString
         }
         UserDefaults.standard.set(urls, forKey: Self.savedURLsKey)
+        UserDefaults.standard.set(tabs.map(\.persistentID), forKey: Self.savedIDsKey)
+        UserDefaults.standard.set(tabs.map(\.controller.pageTitle), forKey: Self.savedTitlesKey)
         let index = activeTabID.flatMap { id in tabs.firstIndex { $0.id == id } } ?? 0
         UserDefaults.standard.set(index, forKey: Self.savedActiveIndexKey)
+    }
+
+    /// Drops pictures left by tabs closed in an earlier version or run.
+    private func pruneThumbnails(keeping ids: Set<String>) {
+        let files = (try? FileManager.default.contentsOfDirectory(at: Self.thumbnailDirectory, includingPropertiesForKeys: nil)) ?? []
+        for file in files where !ids.contains(file.deletingPathExtension().lastPathComponent) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 }

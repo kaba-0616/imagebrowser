@@ -29,6 +29,9 @@ final class WebViewController: NSObject, ObservableObject {
     /// TabsView's grid so each cell shows the actual site instead of a
     /// generic placeholder icon.
     @Published private(set) var thumbnail: UIImage?
+    /// Called with each thumbnail actually taken, so TabManager can keep it
+    /// on disk across relaunches.
+    var onThumbnailCaptured: ((UIImage) -> Void)?
     /// Set when the long-press gesture resolves to an image URL on the page.
     /// BrowserView watches this to present the save menu.
     @Published var longPressedImageURL: URL?
@@ -805,7 +808,12 @@ final class WebViewController: NSObject, ObservableObject {
                     let newURL = webView.url?.absoluteString ?? ""
                     if newURL != self.urlString { self.resetNetworkImageHistory(to: newURL) }
                     self.urlString = newURL
-                    if !newURL.isEmpty { self.lastLoadedURL = newURL }
+                    if !newURL.isEmpty {
+                        if URL(string: newURL)?.host != URL(string: self.lastLoadedURL)?.host {
+                            self.pageTitle = webView.title ?? ""
+                        }
+                        self.lastLoadedURL = newURL
+                    }
                 }
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] webView, _ in
@@ -822,10 +830,13 @@ final class WebViewController: NSObject, ObservableObject {
             },
             webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
                 Task { @MainActor in
-                    // Keep the old title when the page is gone rather than
-                    // replaced (see `lastLoadedURL`).
+                    // An empty title never replaces a known one: the page
+                    // going away (see `lastLoadedURL`) and a relaunched tab
+                    // still loading both report "" first, and the tab list
+                    // then showed "新しいタブ". A move to another site
+                    // clears it in the url observer instead.
                     let title = webView.title ?? ""
-                    if title.isEmpty && webView.url == nil { return }
+                    if title.isEmpty { return }
                     self?.pageTitle = title
                 }
             }
@@ -1221,7 +1232,24 @@ final class WebViewController: NSObject, ObservableObject {
 
     // MARK: - Thumbnail
 
+    /// What the tab list shows before this session has loaded anything --
+    /// the title and picture saved from the last run.
+    func restoreDisplay(title: String, thumbnail: UIImage?) {
+        if pageTitle.isEmpty { pageTitle = title }
+        if self.thumbnail == nil { self.thumbnail = thumbnail }
+    }
+
+    /// For the visible tab, right before the tab list opens: the picture
+    /// from the end of its first load is often just the site's splash.
+    func refreshThumbnail() {
+        captureThumbnail()
+    }
+
     private func captureThumbnail() {
+        // A web view that isn't on screen snapshots as a blank image, with
+        // no error (seen on device: after a relaunch every restored tab but
+        // the visible one ended up blank). Keep the previous picture.
+        guard webView.window != nil else { return }
         let config = WKSnapshotConfiguration()
         webView.takeSnapshot(with: config) { [weak self] image, error in
             guard let self else { return }
@@ -1230,6 +1258,7 @@ final class WebViewController: NSObject, ObservableObject {
                 return
             }
             self.thumbnail = image
+            if let image { self.onThumbnailCaptured?(image) }
         }
     }
 
