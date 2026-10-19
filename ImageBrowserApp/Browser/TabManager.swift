@@ -16,6 +16,9 @@ final class BrowserTab: ObservableObject, Identifiable {
     var lastKnownURL: String?
     /// So a tab whose URL stays nil is logged once, not on every save.
     var loggedMissingURL = false
+    /// The tab whose page opened this one as a popup (e.g. a "Sign in with
+    /// Google" window) -- where closing this tab goes back to.
+    var openerID: UUID?
 
     init(persistentID: String = UUID().uuidString) {
         self.persistentID = persistentID
@@ -82,8 +85,9 @@ final class TabManager: ObservableObject {
     /// ordinary tab, and switches to it -- see WebViewController.onOpenTab
     /// for why this needs to be a real tab rather than a disposable dialog.
     @discardableResult
-    func openTab(wrapping webView: WKWebView) -> BrowserTab {
+    func openTab(wrapping webView: WKWebView, openedBy openerID: BrowserTab.ID? = nil) -> BrowserTab {
         let tab = BrowserTab(wrapping: webView)
+        tab.openerID = openerID
         wireTab(tab)
         tabs.append(tab)
         activeTabID = tab.id
@@ -111,7 +115,15 @@ final class TabManager: ObservableObject {
             }
         } else {
             if activeTabID == id {
-                activeTabID = tabs[min(index, tabs.count - 1)].id
+                // A sign-in popup closing itself goes back to the page that
+                // opened it. Taking the neighbour instead (the popup sits at
+                // the end) landed on the last tab -- seen on device: Google
+                // sign-in on one message site ended up on the Yodel tab.
+                if let opener = closed.openerID, tabs.contains(where: { $0.id == opener }) {
+                    activeTabID = opener
+                } else {
+                    activeTabID = tabs[min(index, tabs.count - 1)].id
+                }
             }
             saveState()
         }
@@ -158,8 +170,8 @@ final class TabManager: ObservableObject {
                 try? image.jpegData(compressionQuality: 0.6)?.write(to: Self.thumbnailURL(for: persistentID), options: .atomic)
             }
         }
-        tab.controller.onOpenTab = { [weak self] popupWebView in
-            self?.openTab(wrapping: popupWebView)
+        tab.controller.onOpenTab = { [weak self, weak tab] popupWebView in
+            self?.openTab(wrapping: popupWebView, openedBy: tab?.id)
         }
         tab.controller.onRequestClose = { [weak self, weak tab] in
             guard let tab else { return }
