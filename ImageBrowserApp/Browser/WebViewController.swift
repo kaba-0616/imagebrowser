@@ -347,6 +347,17 @@ final class WebViewController: NSObject, ObservableObject {
             baseCandidates.removeAll { posterSet.contains($0) }
             AppLog.log("動画のサムネイルを除外: \(videoPosters.count)件")
         }
+        // The site's own UI pictures that arrive over the network like
+        // photos do (seen on device: the tutorial icons and the splash logo
+        // of the message apps). Also kept for the "除外" filter.
+        let siteAssets = baseCandidates.compactMap { url in
+            Self.siteAssetReason(url).map { (url, $0) }
+        }
+        if !siteAssets.isEmpty {
+            let assetSet = Set(siteAssets.map(\.0))
+            baseCandidates.removeAll { assetSet.contains($0) }
+            AppLog.log("サイトのUI画像を除外: \(siteAssets.count)件")
+        }
 
         var upgradedFromAPI = 0
         var upgradedFromCache = 0
@@ -381,7 +392,8 @@ final class WebViewController: NSObject, ObservableObject {
         AppLog.debug("抽出対象の画像URL一覧: \(candidates.map { Self.shortPath($0.url) }.joined(separator: ", "))")
 
         let networkImages = (candidates.map { ($0.url, $0.rendered, nil as String?) }
-                             + videoPosters.map { ($0, nil as URL?, "video" as String?) })
+                             + videoPosters.map { ($0, nil as URL?, "video" as String?) }
+                             + siteAssets.map { ($0.0, nil as URL?, $0.1 as String?) })
             .map { url, rendered, excluded -> PageImage in
             // A stable id per URL (not a running counter) so the same photo
             // keeps the same id across repeated extractions -- that's what
@@ -637,6 +649,16 @@ final class WebViewController: NSObject, ObservableObject {
 
     /// Fallback for video posters when the API couldn't be asked: the site
     /// names a video's extracted poster frame `<name>.0000000.jpg`.
+    /// `tutorial-contents/` is where the message apps' `/v2/tutorials` API
+    /// keeps its how-to pictures (Nogizaka46 and Yodel, both seen in logs);
+    /// `splash/img/` is the Flutter template's launch logo.
+    static func siteAssetReason(_ url: URL) -> String? {
+        let path = url.path
+        if path.contains("/tutorial-contents/") { return "tutorial" }
+        if path.contains("/splash/img/") { return "splash" }
+        return nil
+    }
+
     private static func looksLikeVideoPoster(_ url: URL) -> Bool {
         url.lastPathComponent.range(of: #"\.\d{7}\.(jpe?g|png)$"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
