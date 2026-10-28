@@ -334,8 +334,16 @@ private struct BrowserTabContentView: View {
     /// Free users: one rewarded ad buys exactly one extraction run. Nothing
     /// is stored -- the next extraction asks again.
     private func watchAdForOneExtraction() async -> RewardedAdManager.Outcome {
-        let outcome = await RewardedAdManager.shared.show()
+        var outcome = await RewardedAdManager.shared.show()
         AppLog.log("リワード広告の結果: \(outcome)")
+        // No ad to show (no fill, offline, or the AdMob account suspension
+        // of 2026-10-28): run the extraction anyway instead of blocking the
+        // user on something they cannot fix. Closing a shown ad early still
+        // grants nothing.
+        if outcome == .unavailable {
+            AppLog.log("リワード広告なしで1回分を許可")
+            outcome = .earned
+        }
         guard outcome == .earned else { return outcome }
         showPaywall = false
         // The grid is another sheet; it can't open until the paywall's

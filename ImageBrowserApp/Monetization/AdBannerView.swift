@@ -24,8 +24,19 @@ enum AdUnit {
     case bottom
     case rewarded
 
-    /// imagebrowser用にAdMobコンソールで発行した実広告ユニットID。
+    /// TestFlight とシミュレータでは Google のサンプルユニット: 2026-10-28 に
+    /// AdMob アカウントが無効なトラフィックで一時停止された。開発中に自分で
+    /// 本番の広告を見たりタップしたりしたのが原因とみている。
     var id: String {
+        guard AppVersion.isTestBuild else { return productionID }
+        switch self {
+        case .bottom: return "ca-app-pub-3940256099942544/2934735716"
+        case .rewarded: return "ca-app-pub-3940256099942544/1712485313"
+        }
+    }
+
+    /// imagebrowser用にAdMobコンソールで発行した実広告ユニットID。
+    private var productionID: String {
         switch self {
         case .bottom: return "ca-app-pub-1034383442757151/9505213630"
         // 広告ユニット名「一括抽出リワード」。
