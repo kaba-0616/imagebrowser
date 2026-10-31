@@ -21,9 +21,11 @@ enum ImageExtractionBridge {
         let result = try await webView.callAsyncJavaScript(
             script, arguments: ["withBackgrounds": withBackgrounds], contentWorld: .page)
         guard let jsonString = result as? String else { throw ExtractionError.scriptFailed }
-        if let note = try? await webView.evaluateJavaScript("window.__ImageBrowserCollector.walkNote()") as? String,
-           !note.isEmpty {
-            AppLog.log(note)
+        for getter in ["collectNote", "walkNote"] {
+            if let note = try? await webView.evaluateJavaScript("window.__ImageBrowserCollector.\(getter)()") as? String,
+               !note.isEmpty {
+                AppLog.log(note)
+            }
         }
         return PageImageDecoding.decode(jsonString: jsonString)
     }

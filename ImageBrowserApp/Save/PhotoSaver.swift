@@ -179,6 +179,21 @@ final class PhotoSaver: ObservableObject {
     /// original. Where that guess is wrong the page's own URL is still good,
     /// so it is tried rather than reporting a failure.
     private func fetch(_ image: PageImage) async throws -> Data {
+        // 原寸が別ページにしか書かれていない写真は、保存するこの瞬間に
+        // そのページを読む。選ばれた分しか読まないので、5枚なら5回
+        // (拡大表示で既に読んだページは読み直さない)。
+        if let page = image.originalPageURL {
+            let outcome = await OriginalPageResolver.shared.original(forPage: page, thumbnail: image.url)
+            if let note = outcome.note { appendLog(note, isError: true) }
+            if let original = outcome.original {
+                do {
+                    return try await fetch(original, isSVG: image.isSVG)
+                } catch {
+                    appendLog("原寸の取得に失敗、表示されていた方を保存します: \(error.localizedDescription)",
+                              isError: true)
+                }
+            }
+        }
         do {
             return try await fetch(image.url, isSVG: image.isSVG)
         } catch {

@@ -1,16 +1,14 @@
 // 画像収集ロジック。ImageSaver(Safari Action Extension)のAction.jsから
-// 収集アルゴリズムの核(img/picture/source/poster/CSS背景画像/OGP/SVG/
-// lazy-load属性/リサイズURL復元)を移植し、拡張機能特有の複雑さ
-// (completionFunction前提のタイムアウト管理、カルーセル自動送り、
-// サイト固有ハック)を取り除いて単純化したもの。
+// 収集アルゴリズム(img/picture/source/poster/CSS背景画像/OGP/SVG/
+// lazy-load属性/リサイズURL復元)と、ページの仕分け(おすすめ記事・
+// 部品・別記事の画像を既定で隠す、ソース走査、ギャラリーの原寸の
+// 取得先)を移植したもの(仕分けは2026-10-31に追加)。
 //
 // window.__ImageBrowserCollector として以下を公開する:
-//   collect(withBackgrounds) -> Array<{url, width, height, origin}> を同期的に返す
+//   collect(withBackgrounds) -> Array<{url, width, height, origin, excluded?, why?, page?, rendered?}>
+//   collectAsync(...)        -> Instagramの投稿ではカルーセルを送ってから collect
+//   collectNote()/walkNote() -> 直前の抽出の仕分け・送りの記録(ログ用)
 //   findImageAt(x, y)        -> 座標上の画像URL(文字列)、無ければnull
-//
-// フルブラウザはユーザー自身がページを操作してから抽出を呼べるため、
-// Action.js にあったカルーセル自動送りは不要(ページを開いた一瞬しか
-// チャンスが無い拡張機能ならではの事情だった)。
 (function () {
     "use strict";
 
@@ -25,18 +23,86 @@
     // これだけが検出されてしまっていた。除外することで、Canvas描画への
     // フォールバック(下のisFlutterPage/isCanvasRenderedPage参照)に
     // ちゃんと繋がるようにする。
-    var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\/|\/img_protect\.png|\/splash\/img\//i;
+    var UI_ASSET_PATH = /\/rsrc\.php\/|static\.cdninstagram\.com|\/static\.xx\.fbcdn\.net\/|\/img_protect\.png|\/splash\/img\/|\/ads?_img\//i;
 
     // .../<hash>/1200_1200_102400.jpg のようなリサイズ配信URLから
     // 元画像URLを復元する。
     var RESIZED_PATH = /^(.*\/[0-9a-f]{16,})\/\d+_\d+_\d+(\.(?:jpe?g|png|gif))$/i;
     var REQUESTED_BOX = /\/(\d+)_\d+_\d+\.[a-z]+$/i;
 
-    // モデルプレス(img-mdpr.freetls.fastly.net)・音楽ナタリー(ogre.natalie.mu)
-    // で確認したクエリパラメータ型のリサイズ指定。パスにhashが埋め込まれる
-    // RESIZED_PATHとは別方式で、ドメインごとにキー名が違うため、確認できた
-    // 2ホストだけに限定したホワイトリストとして持つ(未確認のサイトへ
-    // 汎用的にクエリ除去をかけると、認証・署名用のクエリまで壊しかねない)。
+    // --- 原寸URLの復元(ImageSaverのAction.jsから移植、2026-10-31) -----
+    // 各方式の実測値と経緯はImageSaver側のコメントにある。
+
+    // WordPressは生成した各サイズを name-1024x683.jpg として元ファイルの
+    // 隣に書く。/wp-content/uploads/ に限る。
+    var WP_UPLOADS = /\/wp-content\/uploads\//i;
+    var WP_SIZE_SUFFIX = /-\d{2,5}x\d{2,5}(\.(?:jpe?g|png|gif|webp))$/i;
+    var WP_REQUESTED_WIDTH = /-(\d{2,5})x\d{2,5}\.[a-z]+$/i;
+    var IMAGE_FILE_PATH = /\.(?:jpe?g|png|gif|webp|avif)$/i;
+
+    // Akamai Image Manager(ogre.natalie.mu)。原本より大きい幅を要求すると
+    // 原寸が返る。imwidth / impolicy はAkamai固有の名前で、ありふれた
+    // width単独では反応しない。
+    var AKAMAI_PARAMS = ["impolicy", "imwidth", "imdensity", "width", "height"];
+    var AKAMAI_MAX_WIDTH = 4000;
+
+    function akamaiOriginal(parsed) {
+        if (!parsed.searchParams.has("imwidth")
+            && !parsed.searchParams.has("impolicy")) { return null; }
+        var full = new URL(parsed.href);
+        for (var i = 0; i < AKAMAI_PARAMS.length; i++) {
+            full.searchParams.delete(AKAMAI_PARAMS[i]);
+        }
+        full.searchParams.set("imwidth", String(AKAMAI_MAX_WIDTH));
+        full.searchParams.set("imdensity", "1");
+        return full.href;
+    }
+
+    // microCMS / imgix 系。クエリを全部外すと保管されている原本が返る
+    // (zozoで 902px webp → 5499px JPEG)。fm(format)とw/hが揃うときだけ。
+    var IMAGE_CDN_HOST = /(?:^|\.)microcms-assets\.io$|(?:^|\.)imgix\.net$/i;
+
+    function formatQueryOriginal(parsed) {
+        var q = parsed.searchParams;
+        var looksLikeCDN = IMAGE_CDN_HOST.test(parsed.hostname)
+            || (q.has("fm") && (q.has("w") || q.has("h")));
+        if (!looksLikeCDN) { return null; }
+        if (!IMAGE_FILE_PATH.test(parsed.pathname)) { return null; }
+        var full = new URL(parsed.href);
+        full.search = "";
+        return full.href;
+    }
+
+    // Next.jsの画像最適化エンドポイント。urlパラメータが元画像そのもの。
+    var NEXT_IMAGE_PATH = /\/_next\/image\/?$/i;
+
+    function nextImageOriginal(parsed) {
+        if (!NEXT_IMAGE_PATH.test(parsed.pathname)) { return null; }
+        var src = parsed.searchParams.get("url");
+        if (!src) { return null; }
+        var full;
+        try { full = new URL(src, parsed.href); } catch (e) { return null; }
+        if (full.protocol !== "http:" && full.protocol !== "https:") { return null; }
+        return full.href;
+    }
+
+    // Paperclip / CarrierWave系。番号3段の下のサイズ名フォルダを original に
+    // (cocreco.kodansha.co.jp で large 1280px → original 1600px)。
+    var SIZED_STYLE_PATH =
+        /^(.*\/\d{3,}\/\d{3,}\/\d{3,}\/)(?:thumb|small|medium|large|xlarge|big)(\/[^\/]+)$/i;
+
+    function sizedStyleOriginal(parsed) {
+        if (!SIZED_STYLE_PATH.test(parsed.pathname)) { return null; }
+        var full = new URL(parsed.href);
+        full.pathname = parsed.pathname.replace(SIZED_STYLE_PATH, "$1original$2");
+        return full.href;
+    }
+
+    // モデルプレス(img-mdpr.freetls.fastly.net)で確認したクエリ型の
+    // リサイズ指定。ドメインごとにキー名が違うため、確認できたホストだけの
+    // ホワイトリスト(未確認のサイトへ汎用的にクエリ除去をかけると、
+    // 認証・署名用のクエリまで壊しかねない)。ogre.natalie.mu は上の
+    // Akamai方式が先に効き、impolicy/imwidthの無いURLだけがここに来る。
     var QUERY_RESIZE_HOSTS = {
         "img-mdpr.freetls.fastly.net": ["width", "height", "crop", "quality", "enable", "auto"],
         "ogre.natalie.mu": ["impolicy", "width", "height"]
@@ -66,17 +132,38 @@
     // これより小さい箱に描かれたCSS背景画像はスプライト/アイコンとみなす。
     var SPRITE_MIN_BOX = 60;
 
+    /// 縮小版URLの裏にある原本、または縮小版でなければnull。
     function originalOf(parsed) {
-        if (!RESIZED_PATH.test(parsed.pathname)) { return null; }
-        var full = new URL(parsed.href);
-        full.pathname = parsed.pathname.replace(RESIZED_PATH, "$1$2");
-        return full.href;
+        var full;
+        if (RESIZED_PATH.test(parsed.pathname)) {
+            full = new URL(parsed.href);
+            full.pathname = parsed.pathname.replace(RESIZED_PATH, "$1$2");
+            return full.href;
+        }
+        if (WP_UPLOADS.test(parsed.pathname) && WP_SIZE_SUFFIX.test(parsed.pathname)) {
+            full = new URL(parsed.href);
+            full.pathname = parsed.pathname.replace(WP_SIZE_SUFFIX, "$1");
+            return full.href;
+        }
+        // 既に原寸を指しているURL(書き換えても同じ)は縮小版ではない。
+        var byPathStyle = sizedStyleOriginal(parsed);
+        if (byPathStyle && byPathStyle !== parsed.href) { return byPathStyle; }
+        var byQuery = akamaiOriginal(parsed) || nextImageOriginal(parsed)
+                      || formatQueryOriginal(parsed) || originalOfQuery(parsed);
+        if (byQuery && byQuery !== parsed.href) { return byQuery; }
+        return null;
     }
 
+    /// 縮小版URLが要求している幅。同じ写真の複数のサムネイルのうち
+    /// 大きい方を残すための順位づけにだけ使う。
     function requestedWidth(href) {
-        var m;
-        try { m = REQUESTED_BOX.exec(new URL(href).pathname); } catch (e) { return 0; }
-        return m ? parseInt(m[1], 10) : 0;
+        var parsed;
+        try { parsed = new URL(href); } catch (e) { return 0; }
+        var m = REQUESTED_BOX.exec(parsed.pathname) || WP_REQUESTED_WIDTH.exec(parsed.pathname);
+        if (m) { return parseInt(m[1], 10); }
+        var q = parsed.searchParams;
+        var n = parseInt(q.get("imwidth") || q.get("width") || q.get("w"), 10);
+        return isFinite(n) && n > 0 ? n : 0;
     }
 
     function bestFromSrcset(srcset) {
@@ -109,6 +196,15 @@
             if (v) { return v; }
         }
         return null;
+    }
+
+    function sameURL(a, b) {
+        try {
+            return new URL(String(a).trim(), document.baseURI).href
+                === new URL(String(b).trim(), document.baseURI).href;
+        } catch (e) {
+            return String(a) === String(b);
+        }
     }
 
     // Canvas描画アプリでの長押しスナップショット切り出し(findImageAtが
@@ -262,12 +358,294 @@
         return out;
     }
 
+    // --- ページの仕分け(ImageSaverのAction.jsから移植、2026-10-31) -----
+    // 各判定の経緯(どのサイトで何件外れたか)はImageSaver側のコメントにある。
+    // 判定は「捨てる」ではなく「既定で隠す」(excluded = "other" + why)。
+    // 外れたらフィルターから戻せる。
+
+    // 坂道グループの日記ページには、他メンバーの最新記事のサムネイルと
+    // メンバー一覧のアイコンが並ぶ。
+    var MEMBER_WIDGET_HOSTS = ["sakurazaka46.com", "hinatazaka46.com", "nogizaka46.com"];
+    var DIARY_DETAIL_PATH = /\/diary\/detail\/\d+/i;
+    var DIARY_SECTION_PATH = /\/diary\//i;
+    var MEMBER_AVATAR_MAX_BOX = 300;
+
+    function hostHasMemberWidget() {
+        var host = String(document.location.hostname || "").toLowerCase();
+        for (var i = 0; i < MEMBER_WIDGET_HOSTS.length; i++) {
+            var h = MEMBER_WIDGET_HOSTS[i];
+            if (host === h || host.slice(-(h.length + 1)) === "." + h) { return true; }
+        }
+        return false;
+    }
+
+    var MAIN_SIZED_RATIO = 0.9;
+    var TINY_RENDERED_RATIO = 0.16;
+    var ITEM_ID_SEGMENT = /^(?:\d+|[0-9a-z_-]*\d[0-9a-z_-]{7,})$/i;
+    var YEAR_SEGMENT = /^(?:19|20)\d{2}$/;
+    var RELATED_WORDS = [
+        "related", "recommend", "recommended", "recommendation", "recommendations",
+        "ranking", "popular", "pickup",
+        "search", "parts", "menu", "sidebar", "global",
+        "author", "writer", "byline", "profile", "avatar",
+        "outbrain", "taboola", "popin",
+        "more-article", "more-articles", "more-news",
+        "other-article", "other-articles", "other-post", "other-posts"
+    ];
+    var ARTICLE_URL_ATTRS = ["data-url", "data-href", "data-permalink", "data-article-url"];
+    var BANNER_FILENAME = /(?:^|[\/_-])(?:banner|bnr|logo|icon|ic|nav|btn|sprite|copy)s?(?:[\/_.-]|$)/i;
+    var SITE_ASSET_FILE = /^\/(?:img|images|assets|static|common|shared)\/[^\/]+$/i;
+    var WP_SITE_ASSET = /\/wp-content\/(?:themes|plugins)\//i;
+    var GALLERY_MIN_PAGES = 3;
+    var LEAD_AREA_MULTIPLE = 3;
+    var LOADED_AREA_FLOOR = 64 * 64;
+
+    function pathSegments(pathname) {
+        var parts = String(pathname || "").split("/");
+        var kept = [];
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i]) { kept.push(parts[i]); }
+        }
+        return kept;
+    }
+
+    /// 番号は3桁以上だけ記事IDとみなす(/2026/10/26/slug/ の「26」を除く)。
+    function looksLikeItemId(seg) {
+        if (!ITEM_ID_SEGMENT.test(seg) || YEAR_SEGMENT.test(seg)) { return false; }
+        if (/^\d+$/.test(seg)) { return seg.length >= 3; }
+        return true;
+    }
+
+    /// 記事そのものを指している階層(3段まで遡る)。無ければ null。
+    function articleParentPath(pathname) {
+        var kept = pathSegments(pathname);
+        if (kept.length < 3) { return null; }
+        kept.pop();
+        for (var up = 0; up < 3 && kept.length >= 2; up++) {
+            if (looksLikeItemId(kept[kept.length - 1])) {
+                return "/" + kept.join("/");
+            }
+            kept.pop();
+        }
+        return null;
+    }
+
+    var lastCollectNote = "";
+
     function collect(withBackgrounds) {
         var seen = {};
         var images = [];
         var order = 0;
+        var startedAt = Date.now();
+        var notes = [];
 
-        function addURL(url, width, height, origin) {
+        var here = String(document.location.pathname || "");
+        var hereTrimmed = here.replace(/\/+$/, "");
+        var thisPageKey = pageKey(here);
+        var thisArticleParent = articleParentPath(here);
+        var onDiaryDetail = hostHasMemberWidget() && DIARY_DETAIL_PATH.test(here);
+        var onCarouselPost = isInstagram() && onPostPermalink();
+
+        // 「大きい」「小さい」は画面幅に対する割合で決める(固定pxにすると
+        // iPhoneでは主役の写真でも届かず判定ごと無効になる)。
+        var viewportWidth = 0;
+        try {
+            viewportWidth = (document.documentElement && document.documentElement.clientWidth) || 0;
+        } catch (e) { viewportWidth = 0; }
+        if (!(viewportWidth > 0)) { viewportWidth = 390; }
+        var MAIN_IMAGE_MIN_BOX = Math.max(280, viewportWidth * 0.5);
+
+        var widestCache = null;
+        function widestRendered() {
+            if (widestCache !== null) { return widestCache; }
+            widestCache = 0;
+            var imgs;
+            try { imgs = document.querySelectorAll("img"); } catch (e) { return 0; }
+            for (var i = 0; i < imgs.length; i++) {
+                var r;
+                try { r = imgs[i].getBoundingClientRect(); } catch (e) { continue; }
+                if (r && r.width > widestCache) { widestCache = r.width; }
+            }
+            return widestCache;
+        }
+
+        function pageHasMainImage() {
+            return widestRendered() >= MAIN_IMAGE_MIN_BOX;
+        }
+
+        function isMainSized(el) {
+            var widest = widestRendered();
+            if (!(widest > 0)) { return false; }
+            var rect;
+            try { rect = el.getBoundingClientRect(); } catch (e) { return false; }
+            if (!rect) { return false; }
+            return rect.width >= MAIN_IMAGE_MIN_BOX && rect.width >= widest * MAIN_SIZED_RATIO;
+        }
+
+        function sameArticle(targetPathname) {
+            var t = String(targetPathname || "").replace(/\/+$/, "");
+            if (t === hereTrimmed) { return true; }
+            if (t.indexOf(hereTrimmed + "/") === 0) { return true; }
+            if (thisArticleParent) {
+                return t === thisArticleParent || t.indexOf(thisArticleParent + "/") === 0;
+            }
+            return false;
+        }
+
+        function linkTarget(el) {
+            var link;
+            try { link = el.closest("a[href]"); } catch (e) { return null; }
+            if (!link || !link.href) { return null; }
+            try { return new URL(link.href, document.baseURI); } catch (e) { return null; }
+        }
+
+        /// Instagramの投稿ページと坂道の日記詳細ページだけ: 別の投稿・
+        /// 別の日記へのリンクに包まれた画像。
+        function linksElsewhereHere(el) {
+            if (!onDiaryDetail && !onCarouselPost) { return false; }
+            var target = linkTarget(el);
+            if (!target) { return false; }
+            if (target.origin !== document.location.origin) { return true; }
+            if (onDiaryDetail) {
+                return target.pathname.replace(/\/+$/, "") !== hereTrimmed;
+            }
+            return pageKey(target.pathname) !== thisPageKey;
+        }
+
+        /// 日記ページ下の「メンバー別ブログ」一覧のアイコン。リンク先では
+        /// 区別できず、箱の大きさで見分ける。
+        function isMemberAvatar(el) {
+            if (!hostHasMemberWidget() || !DIARY_SECTION_PATH.test(here)) { return false; }
+            var rect;
+            try { rect = el.getBoundingClientRect(); } catch (e) { return false; }
+            return rect.width <= MEMBER_AVATAR_MAX_BOX && rect.height <= MEMBER_AVATAR_MAX_BOX;
+        }
+
+        /// WordPressの「関連記事」タイル: 小さな生成サイズで、別ページへの
+        /// リンクに包まれたもの。
+        function isRelatedThumb(el, url) {
+            var m = WP_REQUESTED_WIDTH.exec(String(url || "").split(/[?#]/)[0]);
+            if (!m || parseInt(m[1], 10) > 300 || !WP_UPLOADS.test(String(url))) { return false; }
+            var target = linkTarget(el);
+            if (!target) { return false; }
+            if (IMAGE_FILE_PATH.test(target.pathname)) { return false; }
+            return target.origin !== document.location.origin
+                || target.pathname.replace(/\/+$/, "") !== hereTrimmed;
+        }
+
+        /// 主役の写真があるページで、別の記事へのリンクに包まれたサムネイル。
+        function isOtherPostThumb(el) {
+            if (!pageHasMainImage()) { return false; }
+            if (isMainSized(el)) { return false; }
+            var target = linkTarget(el);
+            if (!target) { return false; }
+            if (IMAGE_FILE_PATH.test(target.pathname)) { return false; }
+            if (target.origin !== document.location.origin) { return true; }
+            return !sameArticle(target.pathname);
+        }
+
+        // 見ているURLに含まれる語は、そのサイトでは「記事の種別」なので外す
+        // (s-style.machico.mu の /pickup/ で本文が丸ごと消えた)。
+        var RELATED_SECTION = (function () {
+            var lower = here.toLowerCase();
+            var words = [];
+            for (var i = 0; i < RELATED_WORDS.length; i++) {
+                if (lower.indexOf(RELATED_WORDS[i]) === -1) { words.push(RELATED_WORDS[i]); }
+            }
+            if (!words.length) { return null; }
+            return new RegExp("(?:^|[\\s_-])(?:" + words.join("|") + ")s?(?:$|[\\s_-])", "i");
+        })();
+
+        function isInRelatedSection(el) {
+            if (!RELATED_SECTION) { return false; }
+            var node = el;
+            for (var depth = 0; node && depth < 12; depth++) {
+                var cls = "";
+                var id = "";
+                try {
+                    cls = (node.getAttribute && node.getAttribute("class")) || "";
+                    id = (node.getAttribute && node.getAttribute("id")) || "";
+                } catch (e) {}
+                if (RELATED_SECTION.test(cls) || RELATED_SECTION.test(id)) { return true; }
+                node = node.parentElement;
+            }
+            return false;
+        }
+
+        /// 無限スクロールで継ぎ足された別の記事(data-url等で見分ける)。
+        function isInOtherArticleBlock(el) {
+            var node = el;
+            for (var depth = 0; node && depth < 12; depth++) {
+                for (var i = 0; i < ARTICLE_URL_ATTRS.length; i++) {
+                    var raw = null;
+                    try { raw = node.getAttribute && node.getAttribute(ARTICLE_URL_ATTRS[i]); } catch (e) {}
+                    if (!raw) { continue; }
+                    var target;
+                    try { target = new URL(String(raw), document.baseURI); } catch (e) { continue; }
+                    return !sameArticle(target.pathname);
+                }
+                node = node.parentElement;
+            }
+            return false;
+        }
+
+        function linksWithinArticle(el) {
+            var target = linkTarget(el);
+            if (!target || target.origin !== document.location.origin) { return false; }
+            return sameArticle(target.pathname);
+        }
+
+        /// 画面幅の16%以下に描かれた画像(コメント欄のアイコン等)。主役の
+        /// 写真があるページだけ。同じ記事の別カットへのサムネイルは残す。
+        function isTinyRendered(el) {
+            if (!pageHasMainImage()) { return false; }
+            if (linksWithinArticle(el)) { return false; }
+            var rect;
+            try { rect = el.getBoundingClientRect(); } catch (e) { return false; }
+            if (!rect || !(rect.width > 0 && rect.height > 0)) { return false; }
+            var limit = viewportWidth * TINY_RENDERED_RATIO;
+            return rect.width <= limit && rect.height <= limit;
+        }
+
+        var siteBrand = (function () {
+            var host = String(document.location.hostname || "").toLowerCase();
+            var label = host.replace(/^www\./, "").split(".")[0];
+            return label.length >= 4 ? label : null;
+        })();
+        var brandPattern = siteBrand
+            ? new RegExp("(?:^|[\\/_-])" + siteBrand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?:[\\/_.-]|$)", "i")
+            : null;
+
+        /// URLだけで分かる「部品」。ファイル名がバナー/ロゴ等を名乗る、
+        /// サイト名入り、部品置き場の直下、WordPressのテーマ/プラグイン配下。
+        function assetReason(url) {
+            var path;
+            try { path = new URL(String(url), document.baseURI).pathname; } catch (e) { return null; }
+            var name = path.split("/").pop() || "";
+            if (BANNER_FILENAME.test(name)) { return "名前が部品"; }
+            if (brandPattern && brandPattern.test(name)) { return "サイト名入り"; }
+            if (SITE_ASSET_FILE.test(path) || WP_SITE_ASSET.test(path)) { return "部品置き場"; }
+            return null;
+        }
+
+        /// `el` を「別の投稿」に回すなら理由、残すなら null。
+        function classifyOther(el, url) {
+            if (linksElsewhereHere(el)) { return "別投稿リンク"; }
+            if (isMemberAvatar(el)) { return "メンバーアイコン"; }
+            if (isRelatedThumb(el, url)) { return "関連記事タイル"; }
+            if (isOtherPostThumb(el)) { return "別記事へのリンク"; }
+            if (isInRelatedSection(el)) { return "囲みの名前"; }
+            if (isInOtherArticleBlock(el)) { return "別記事ブロック"; }
+            if (isTinyRendered(el)) { return "極小表示"; }
+            return null;
+        }
+
+        var upgraded = 0;
+
+        /// `renderedOverride`: 同じ写真のページ側の小さい版(imgのsrcと、
+        /// そのsrcsetの最大候補)。`box`: 画面上の幅。同じURLが何度も
+        /// 置かれているときは、一番大きく表示されている方で仕分けを決める。
+        function addURL(url, width, height, origin, why, renderedOverride, box) {
             if (!url) { return; }
             url = String(url).trim();
             if (!url || url.indexOf("data:") === 0) { return; }
@@ -280,23 +658,43 @@
             url = parsed.href;
             // UI部品は捨てずに印を付けて残す: 結果画面の「除外した画像」で
             // 見られるようにするため(ユーザー要望)。
-            if (UI_ASSET_PATH.test(url)) { origin = "icon"; }
+            if (UI_ASSET_PATH.test(url)) { origin = "icon"; why = null; }
 
             var rendered = null;
-            var original = originalOf(parsed) || originalOfQuery(parsed);
+            var original = originalOf(parsed);
             if (original) {
                 rendered = url;
                 url = original;
                 width = 0;
                 height = 0;
+            } else if (renderedOverride) {
+                var smaller = null;
+                try { smaller = new URL(String(renderedOverride).trim(), document.baseURI); } catch (e) {}
+                if (smaller && smaller.protocol !== "data:" && smaller.href !== url) {
+                    rendered = smaller.href;
+                    width = 0;
+                    height = 0;
+                }
             }
 
+            origin = origin || "dom";
             var kept = seen[url];
             if (kept) {
                 if (rendered && requestedWidth(rendered) > requestedWidth(kept.rendered || "")) {
                     kept.rendered = rendered;
                 }
+                if ((box || 0) > (kept.box || 0) && kept.origin !== "icon") {
+                    kept.box = box || 0;
+                    kept.origin = origin;
+                    if (origin === "other" && why) { kept.why = why; } else { delete kept.why; }
+                }
                 return;
+            }
+            // 名前で分かる部品は、原寸化した後のURLで見る(Next.jsの
+            // /_next/image?url=... のままではファイル名が "image" になる)。
+            if (origin === "dom") {
+                var assetWhy = assetReason(url);
+                if (assetWhy) { origin = "other"; why = assetWhy; }
             }
             // 有限数か文字列だけを持たせる: NaN/undefined/nullが1つでも
             // 混ざるとSwift側のJSONデコードが壊れるため。
@@ -304,32 +702,62 @@
                 url: url,
                 width: (typeof width === "number" && isFinite(width)) ? width : 0,
                 height: (typeof height === "number" && isFinite(height)) ? height : 0,
-                origin: origin || "dom",
-                order: order++
+                origin: origin,
+                order: order++,
+                box: (typeof box === "number" && isFinite(box)) ? box : 0
             };
-            if (rendered) { entry.rendered = rendered; }
+            if (origin === "other" && why) { entry.why = why; }
+            if (rendered) { entry.rendered = rendered; upgraded++; }
             seen[url] = entry;
             images.push(entry);
+        }
+
+        function boxWidth(el) {
+            try {
+                var r = el.getBoundingClientRect();
+                return (r && r.width) || 0;
+            } catch (e) { return 0; }
         }
 
         function scanRoot(root) {
             var videoEls = root.querySelectorAll("video");
             for (var v = 0; v < videoEls.length; v++) {
                 addURL(videoEls[v].getAttribute("poster"), 0, 0, "video");
+                // 動画の上にサムネイルを普通の<img>で重ねるプレイヤーが多い。
+                var container = videoEls[v].parentElement;
+                if (container) {
+                    var covers = container.querySelectorAll("img");
+                    for (var c = 0; c < covers.length; c++) {
+                        addURL(covers[c].currentSrc || covers[c].src, 0, 0, "video");
+                    }
+                }
             }
 
             var videoCovers = instagramVideoCovers(root);
             var imgEls = root.querySelectorAll("img");
             for (var i = 0; i < imgEls.length; i++) {
                 var img = imgEls[i];
-                var url = img.currentSrc || img.src
+                var loadedSrc = img.currentSrc || img.src || "";
+                // 遅延読み込みの置き石(1x1のdata:)のときは data-src 側に譲る
+                // (oricon の写真一覧で30枚中7枚しか取れていなかった)。
+                if (/^data:/i.test(loadedSrc) && fromLazyAttrs(img)) { loadedSrc = ""; }
+                var url = loadedSrc
                     || bestFromSrcset(img.getAttribute("srcset"))
                     || bestFromSrcset(img.getAttribute("data-srcset"))
                     || fromLazyAttrs(img);
-                var imgOrigin = linksElsewhere(img) ? "other"
+                var why = classifyOther(img, url);
+                var imgOrigin = why ? "other"
                     : (videoCovers.indexOf(img) !== -1 ? "video" : "dom");
-                addURL(url, img.naturalWidth, img.naturalHeight, imgOrigin);
-                addURL(bestFromSrcset(img.getAttribute("srcset")), 0, 0, imgOrigin);
+                var box = boxWidth(img);
+                var srcsetBest = bestFromSrcset(img.getAttribute("srcset"));
+                // srcsetの大きい方と表示中の小さい方は同じ写真: 1件にまとめる
+                // (大きい方を保存、小さい方でプレビュー)。
+                if (srcsetBest && url && img.naturalWidth >= 100 && !sameURL(srcsetBest, url)) {
+                    addURL(srcsetBest, 0, 0, imgOrigin, why, url, box);
+                } else {
+                    addURL(url, img.naturalWidth, img.naturalHeight, imgOrigin, why, null, box);
+                    addURL(srcsetBest, 0, 0, imgOrigin, why, null, box);
+                }
             }
 
             var sourceEls = root.querySelectorAll("picture source, video source, audio source");
@@ -341,6 +769,21 @@
             var posterEls = root.querySelectorAll("[poster]");
             for (var p = 0; p < posterEls.length; p++) {
                 addURL(posterEls[p].getAttribute("poster"), 0, 0, "video");
+            }
+
+            // headで宣言された先読み画像。Instagramでは開いていない画面の
+            // サムネイルなのでカバー扱い、他のサイトでは本文の主役画像
+            // (SPAがDOMに出さない原寸)。
+            var linkOrigin = isInstagram() ? "meta" : "dom";
+            var linkEls = root.querySelectorAll("link[rel~='preload'][as='image'], link[rel~='image_src']");
+            for (var l = 0; l < linkEls.length; l++) {
+                addURL(linkEls[l].getAttribute("href"), 0, 0, linkOrigin);
+                addURL(bestFromSrcset(linkEls[l].getAttribute("imagesrcset")), 0, 0, linkOrigin);
+            }
+            // サイト自身のアプリアイコン。ページの中身ではない。
+            var touchIconEls = root.querySelectorAll("link[rel~='apple-touch-icon']");
+            for (var ti = 0; ti < touchIconEls.length; ti++) {
+                addURL(touchIconEls[ti].getAttribute("href"), 0, 0, "icon");
             }
 
             var metaEls = root.querySelectorAll(
@@ -362,7 +805,9 @@
             // 使われるため、img専用のfromLazyAttrsとは別にここで拾う。
             var bgAttrEls = root.querySelectorAll("[data-background-image]");
             for (var ba = 0; ba < bgAttrEls.length; ba++) {
-                addURL(bgAttrEls[ba].getAttribute("data-background-image"), 0, 0, "background");
+                var bgAttrWhy = classifyOther(bgAttrEls[ba], null);
+                addURL(bgAttrEls[ba].getAttribute("data-background-image"), 0, 0,
+                       bgAttrWhy ? "other" : "background", bgAttrWhy);
             }
 
             if (!withBackgrounds) { return; }
@@ -386,14 +831,171 @@
                 if (bg && bg.indexOf("url(") !== -1) {
                     var rect = el.getBoundingClientRect();
                     // アイコン枠の小さい背景(スプライト画像)もアイコン扱いで残す。
-                    var bgOrigin = (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX)
-                        ? "icon" : "background";
+                    var bgOrigin;
+                    var bgWhy = null;
+                    if (rect.width < SPRITE_MIN_BOX && rect.height < SPRITE_MIN_BOX) {
+                        bgOrigin = "icon";
+                    } else {
+                        // 背景として置かれた写真にもimgと同じ仕分けを通す。
+                        bgWhy = classifyOther(el, null);
+                        bgOrigin = bgWhy ? "other" : "background";
+                    }
                     var re = /url\(["']?([^"')]+)["']?\)/g;
                     var m;
                     while ((m = re.exec(bg)) !== null) {
-                        addURL(m[1], 0, 0, bgOrigin);
+                        addURL(m[1], 0, 0, bgOrigin, bgWhy, null, rect.width);
                     }
                 }
+            }
+        }
+
+        /// ページのHTMLテキストに書かれているだけの画像URL。SPAはDOMに
+        /// しない原寸URLをインラインJSONに持っていることがある。既定で隠す。
+        function collectSource() {
+            try {
+                var BS = String.fromCharCode(92);
+                var html = document.documentElement.innerHTML
+                    .split(BS + "u002F").join("/")
+                    .split(BS + "u002f").join("/")
+                    .split(BS + "/").join("/");
+                var QUOTES = String.fromCharCode(34) + String.fromCharCode(39) + String.fromCharCode(96);
+                var CLASS = "[^" + BS + "s" + QUOTES + "<>{}" + BS + "[" + BS + "]]";
+                var IMAGE_URL = new RegExp(
+                    "https?://" + CLASS + "+?" + BS + ".(?:jpe?g|png|gif|webp|heic|heif|bmp|svg|avif)" +
+                    "(?:" + BS + "?" + CLASS + "*)?", "gi");
+                var hit;
+                var found = 0;
+                var before = images.length;
+                while ((hit = IMAGE_URL.exec(html)) !== null && found < 800) {
+                    addURL(hit[0], 0, 0, "source");
+                    found++;
+                }
+                notes.push("ソース走査: 一致" + found + "件・新規" + (images.length - before) + "件");
+            } catch (e) {
+                notes.push("ソース走査に失敗: " + e);
+            }
+        }
+
+        /// 記事ごとのフォルダに画像を置くサイトで、別の記事のフォルダに
+        /// ある画像を外す(xtrend.nikkei.com の「次に読む」)。このページ
+        /// 自身の画像がそのフォルダの下に実際にあるときだけ働く。
+        function demoteForeignArticleImages() {
+            var top = pathSegments(hereTrimmed);
+            if (top.length < 2) { return 0; }
+            var prefix = hereTrimmed + "/";
+            var base = "/" + top[0] + "/";
+            var paths = [];
+            var ownFolderUsed = false;
+            var i, parsed;
+            for (i = 0; i < images.length; i++) {
+                parsed = null;
+                try { parsed = new URL(images[i].url, document.baseURI); } catch (e) {}
+                paths.push(parsed);
+                if (parsed && parsed.pathname.indexOf(prefix) === 0) { ownFolderUsed = true; }
+            }
+            if (!ownFolderUsed) { return 0; }
+            var demoted = 0;
+            for (i = 0; i < images.length; i++) {
+                var o = images[i].origin;
+                if (o !== "dom" && o !== "background" && o !== "source") { continue; }
+                parsed = paths[i];
+                if (!parsed) { continue; }
+                if (parsed.pathname.indexOf(prefix) === 0) { continue; }
+                if (parsed.pathname.indexOf(base) !== 0) { continue; }
+                images[i].origin = "other";
+                images[i].why = "別記事のフォルダ";
+                demoted++;
+            }
+            return demoted;
+        }
+
+        function galleryPageOf(img) {
+            var link = linkTarget(img);
+            if (!link) { return null; }
+            if (link.protocol !== document.location.protocol
+                || link.host !== document.location.host) { return null; }
+            if (link.pathname.replace(/\/+$/, "") === hereTrimmed) { return "self"; }
+            if (!sameArticle(link.pathname)) { return null; }
+            link.hash = "";
+            return link.href;
+        }
+
+        function intrinsicArea(el) {
+            var w = el.naturalWidth || 0;
+            var h = el.naturalHeight || 0;
+            if (!(w > 0) || !(h > 0)) { return 0; }
+            return w * h;
+        }
+
+        /// 一覧が小さなサムネイルで、原寸のURLが写真ごとの個別ページにしか
+        /// 書かれていないギャラリー(oricon の写真一覧)。ここでは読みに
+        /// 行かず、取得先(page)を添えるだけ。読むのは保存・拡大の瞬間に、
+        /// 選ばれた分だけ(OriginalPageResolver)。
+        function markGalleryOriginalPages() {
+            var imgEls;
+            try { imgEls = document.querySelectorAll("a[href] img"); } catch (e) { return; }
+            var selfLinked = [];
+            var candidates = [];
+            for (var i = 0; i < imgEls.length; i++) {
+                var img = imgEls[i];
+                var raw = img.currentSrc || img.src || "";
+                if (/^data:/i.test(raw) && fromLazyAttrs(img)) { raw = ""; }
+                if (!raw) { raw = fromLazyAttrs(img) || ""; }
+                if (!raw) { continue; }
+                var thumb;
+                try { thumb = new URL(raw, document.baseURI).href; } catch (e) { continue; }
+                var entry = seen[thumb];
+                // seenに無いのは原寸URLへの置き換えが既に効いている印。
+                if (!entry || entry.origin !== "dom" || entry.rendered || entry.page) { continue; }
+                var page = galleryPageOf(img);
+                if (!page) { continue; }
+                if (page === "self") { selfLinked.push(entry); continue; }
+                candidates.push({ entry: entry, page: page, area: intrinsicArea(img) });
+            }
+            // 主役の写真(サムネイルの中央値の3倍以上の画素数)は外す: 主役が
+            // 「次の写真へ」のリンクに包まれていると、次の写真を取ってしまう。
+            var leads = 0;
+            if (candidates.length >= GALLERY_MIN_PAGES) {
+                var areas = [];
+                for (var a = 0; a < candidates.length; a++) {
+                    if (candidates[a].area >= LOADED_AREA_FLOOR) { areas.push(candidates[a].area); }
+                }
+                if (areas.length >= GALLERY_MIN_PAGES) {
+                    areas.sort(function (x, y) { return x - y; });
+                    var ceiling = areas[Math.floor(areas.length / 2)] * LEAD_AREA_MULTIPLE;
+                    var keptCands = [];
+                    for (var b = 0; b < candidates.length; b++) {
+                        if (candidates[b].area >= ceiling) { leads++; continue; }
+                        keptCands.push(candidates[b]);
+                    }
+                    candidates = keptCands;
+                }
+            }
+            // 同じページを2つが押さえたら、小さい方(一覧のサムネイル)に渡す。
+            var claimed = {};
+            for (var c = 0; c < candidates.length; c++) {
+                var holder = claimed[candidates[c].page];
+                if (!holder || candidates[c].area < holder.area) { claimed[candidates[c].page] = candidates[c]; }
+            }
+            var marked = [];
+            for (var d = 0; d < candidates.length; d++) {
+                if (claimed[candidates[d].page] !== candidates[d]) { continue; }
+                candidates[d].entry.page = candidates[d].page;
+                marked.push(candidates[d].entry);
+            }
+            if (marked.length < GALLERY_MIN_PAGES) {
+                for (var k = 0; k < marked.length; k++) { delete marked[k].page; }
+                return;
+            }
+            notes.push("原寸の取得先を添えた: " + marked.length + "枚"
+                       + (leads ? " / 主役として外した" + leads + "枚" : ""));
+            // 今開いているページ自身を指すサムネイルは、この画面の主役の縮小版。
+            if (selfLinked.length && pageHasMainImage()) {
+                for (var s = 0; s < selfLinked.length; s++) {
+                    selfLinked[s].origin = "other";
+                    selfLinked[s].why = "今開いている写真の縮小版";
+                }
+                notes.push("今開いている写真の縮小版を外した: " + selfLinked.length + "枚");
             }
         }
 
@@ -401,7 +1003,8 @@
 
         // 通常サイトでは常時オンにするとトラッカーの計測用画像等のノイズが
         // 増えるだけなので、DOM収集が原理的に無力なFlutterページに限る。
-        if (isFlutterPage()) {
+        var flutter = isFlutterPage();
+        if (flutter) {
             var netImgs = resourceTimingImages();
             for (var ni = 0; ni < netImgs.length; ni++) {
                 addURL(netImgs[ni], 0, 0, "network");
@@ -418,27 +1021,58 @@
             }
         }
 
+        // ソース走査・フォルダ判定・ギャラリーは全体を見る回だけ(カルーセル
+        // 送りの途中で毎回やると重い)。Flutterページはソースに写真が無い。
+        if (withBackgrounds && !flutter) {
+            collectSource();
+            var demoted = demoteForeignArticleImages();
+            if (demoted) { notes.push("別記事のフォルダの画像: " + demoted + "件"); }
+            try { markGalleryOriginalPages(); } catch (e) { notes.push("原寸の取得先で例外: " + e); }
+        }
+
         // Flutter製ページは画面をCanvasに描くので、og:image等のメタ画像は
         // 画面に出ている写真ではなく、SNS共有用のカバー画像(日向坂46
         // メッセージの/ogp_image.png 1200x638で確認)。結果画面では
         // 「除外した画像」フィルターでだけ見せる。
         // Instagramのog:imageも同様: 画面遷移しても書き換わらず、別の投稿の
         // 画像を指していることがある(ImageSaverで確認)。
-        var flutter = isFlutterPage();
         var instagram = isInstagram();
+        var whyCounts = {};
         images.sort(function (a, b) { return a.order - b.order; });
         for (var si = 0; si < images.length; si++) {
-            delete images[si].order;
-            var o = images[si].origin;
-            if ((flutter || instagram) && o === "meta") { images[si].excluded = "cover"; }
-            if (instagram && o === "other") { images[si].excluded = "other"; }
-            if (instagram && o === "video") { images[si].excluded = "video"; }
-            if (o === "icon") {
-                images[si].excluded = /\/splash\/img\//i.test(images[si].url) ? "splash" : "icon";
+            var img2 = images[si];
+            delete img2.order;
+            delete img2.box;
+            var o = img2.origin;
+            if ((flutter || instagram) && o === "meta") { img2.excluded = "cover"; }
+            if (o === "other") {
+                img2.excluded = "other";
+                var w = img2.why || "その他";
+                whyCounts[w] = (whyCounts[w] || 0) + 1;
             }
+            if (o === "source") { img2.excluded = "source"; }
+            if (instagram && o === "video") { img2.excluded = "video"; }
+            if (o === "icon") {
+                img2.excluded = /\/splash\/img\//i.test(img2.url) ? "splash" : "icon";
+            }
+        }
+
+        if (withBackgrounds) {
+            var reasons = [];
+            for (var rk in whyCounts) {
+                if (Object.prototype.hasOwnProperty.call(whyCounts, rk)) { reasons.push(rk + " " + whyCounts[rk]); }
+            }
+            notes.push("別の投稿・部品として隠した: "
+                       + (reasons.length ? reasons.join(" / ") : "なし")
+                       + (pageHasMainImage() ? "" : " (主役の写真が無いページのため、リンク・極小表示の判定は無効)"));
+            if (upgraded) { notes.push("縮小指定を外して原寸URLに: " + upgraded + "件"); }
+            notes.push("合計" + images.length + "件 / " + (Date.now() - startedAt) + "ms");
+            lastCollectNote = "抽出の仕分け: " + notes.join(" / ");
         }
         return images;
     }
+
+    function collectNote() { return lastCollectNote; }
 
     // --- カルーセル送り(Instagramの投稿ページのみ) ---------------------
     // Instagramは表示中のスライドと両隣しかDOMに置かず、残りはページの
@@ -679,6 +1313,7 @@
         collect: collect,
         collectAsync: collectAsync,
         walkNote: walkNote,
+        collectNote: collectNote,
         harvestNetworkImages: harvestNetworkImages,
         findImageAt: findImageAt,
         findImageAtDebug: findImageAtDebug,

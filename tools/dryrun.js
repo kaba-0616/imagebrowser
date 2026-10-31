@@ -169,8 +169,10 @@ function checkJSONSafe(images) {
     check("mdprのリサイズクエリが外れる",
           !!mdpr && mdpr.url === "https://img-mdpr.freetls.fastly.net/article/1234/wm/5678.jpg",
           mdpr && mdpr.url);
-    check("natalieのリサイズクエリが外れる",
-          !!natalie && natalie.url === "https://ogre.natalie.mu/media/news/music/0001/gallery/1.jpg",
+    // natalie はAkamai Image Manager: 原本より大きい幅を要求すると原寸が返る
+    // (ImageSaverで実測、2026-10-21)。
+    check("natalieは原寸幅を要求するURLに書き換わる",
+          !!natalie && natalie.url === "https://ogre.natalie.mu/media/news/music/0001/gallery/1.jpg?imwidth=4000&imdensity=1",
           natalie && natalie.url);
     check("対応外ホストのクエリはそのまま",
           !!other && other.url === "https://example.com/photo.jpg?width=100", other && other.url);
@@ -189,8 +191,11 @@ function checkJSONSafe(images) {
     const images = collector.collect(true);
     console.log("\ndata-background-image属性:");
     checkJSONSafe(images);
+    // WordPressの生成サイズ(-158x118)は外して原本を取りに行き、表示中の
+    // サムネイルはrenderedとして残る。
     check("divのdata-background-imageを拾う",
-          images.some(i => i.url === "https://realsound.jp/wp-content/uploads/author-158x118.jpeg"),
+          images.some(i => i.url === "https://realsound.jp/wp-content/uploads/author.jpeg"
+                           && i.rendered === "https://realsound.jp/wp-content/uploads/author-158x118.jpeg"),
           images.map(i => i.url).join(", "));
 }
 

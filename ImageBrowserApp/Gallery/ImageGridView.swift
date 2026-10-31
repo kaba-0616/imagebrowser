@@ -57,6 +57,8 @@ struct ImageGridView: View {
     @AppStorage("sizeFilter") private var storedSizeFilter = SizeFilter.all.rawValue
     @AppStorage("gridFilter.includeSaved") private var includeSaved = false
     @AppStorage("gridFilter.includeOtherPosts") private var includeOtherPosts = false
+    /// URLs found only in the page's markup text (ImageSaver's "ソース内の画像").
+    @AppStorage("gridFilter.includeSourceOnly") private var includeSourceOnly = false
     @AppStorage("gridFilter.includeVideoPosters") private var includeVideoPosters = false
     @AppStorage("gridFilter.includeMetaImages") private var includeMetaImages = false
     @AppStorage("gridFilter.includeTutorials") private var includeTutorials = false
@@ -91,6 +93,7 @@ struct ImageGridView: View {
         sourceImages.filter { image in
             guard includeSaved || !photoSaver.savedImageIDs.contains(image.id) else { return false }
             guard includeOtherPosts || image.excluded != "other" else { return false }
+            guard includeSourceOnly || image.excluded != "source" else { return false }
             guard includeVideoPosters || image.excluded != "video" else { return false }
             guard includeMetaImages || image.excluded != "cover" else { return false }
             guard includeTutorials || image.excluded != "tutorial" else { return false }
@@ -98,6 +101,9 @@ struct ImageGridView: View {
             guard includeIcons || !isIcon(image) else { return false }
             guard includeBanners || !isBanner(image) else { return false }
             guard includeFailed || !loader.failed.contains(image.id) else { return false }
+            // 原寸が別ページにある写真は大きさで隠さない。手元の寸法は
+            // サムネイルのもの(oricon なら160x236)で、保存されるのは原寸。
+            guard image.originalPageURL == nil else { return true }
             guard sizeFilter != .all else { return true }
             let known = longestSide(of: image)
             return known == 0 || known >= sizeFilter.minimumPixels
@@ -111,6 +117,7 @@ struct ImageGridView: View {
 
     private var savedCount: Int { sourceImages.filter { photoSaver.savedImageIDs.contains($0.id) }.count }
     private var otherPostCount: Int { count { $0.excluded == "other" } }
+    private var sourceOnlyCount: Int { count { $0.excluded == "source" } }
     private var videoPosterCount: Int { count { $0.excluded == "video" } }
     private var metaImageCount: Int { count { $0.excluded == "cover" } }
     private var tutorialCount: Int { count { $0.excluded == "tutorial" } }
@@ -123,6 +130,7 @@ struct ImageGridView: View {
         sizeFilter != .all
             || (!includeSaved && savedCount > 0)
             || (!includeOtherPosts && otherPostCount > 0)
+            || (!includeSourceOnly && sourceOnlyCount > 0)
             || (!includeVideoPosters && videoPosterCount > 0)
             || (!includeMetaImages && metaImageCount > 0)
             || (!includeTutorials && tutorialCount > 0)
@@ -148,12 +156,15 @@ struct ImageGridView: View {
 
     private func isIcon(_ image: PageImage) -> Bool {
         if image.excluded == "icon" { return true }
+        // 原寸が別ページにある写真は、サムネイルの寸法で判断しない。
+        guard image.originalPageURL == nil else { return false }
         let side = longestSide(of: image)
         return side > 0 && side <= Self.iconMaxSide
     }
 
     /// Read from the thumbnail where there is one: resizing keeps the shape.
     private func isBanner(_ image: PageImage) -> Bool {
+        guard image.originalPageURL == nil else { return false }
         var width = Double(image.width)
         var height = Double(image.height)
         if let measured = loader.pixelSizes[image.id] {
@@ -186,7 +197,24 @@ struct ImageGridView: View {
         !visibleImages.isEmpty && visibleImages.allSatisfy { selected.contains($0.id) }
     }
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
+    /// Width the grid last laid out at. The column count follows it so a
+    /// wide window (iPhone Duo's inner display, iPad, landscape) gets more,
+    /// smaller cells instead of three huge ones.
+    @State private var gridWidth: CGFloat = 0
+
+    /// Smallest cell edge before another column is added. Every iPhone in
+    /// portrait (up to 440pt wide) stays at 3 columns, as before.
+    private static let minCellSide: CGFloat = 110
+
+    /// Square columns 1pt apart, never fewer than 3.
+    private static func columnCount(for width: CGFloat) -> Int {
+        guard width > 0 else { return 3 }
+        return max(3, Int((width + 1) / (minCellSide + 1)))
+    }
+
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 1), count: Self.columnCount(for: gridWidth))
+    }
 
     var body: some View {
         mainContent
@@ -352,6 +380,7 @@ struct ImageGridView: View {
             // the scan never checked for that kind.
             filterToggle("保存済みの画像", count: savedCount, isOn: $includeSaved)
             filterToggle("別の投稿の画像", count: otherPostCount, isOn: $includeOtherPosts)
+            filterToggle("ソース内の画像", count: sourceOnlyCount, isOn: $includeSourceOnly)
             filterToggle("動画のサムネイル", count: videoPosterCount, isOn: $includeVideoPosters)
             filterToggle("ページ情報の画像", count: metaImageCount, isOn: $includeMetaImages)
             filterToggle("操作説明の画像", count: tutorialCount, isOn: $includeTutorials)
@@ -421,6 +450,11 @@ struct ImageGridView: View {
                     onChanged: updateDragSelect,
                     onEnded: endDragSelect
                 ))
+                .background(GeometryReader { geo in
+                    Color.clear
+                        .onAppear { gridWidth = geo.size.width }
+                        .onChange(of: geo.size.width) { gridWidth = $0 }
+                })
             }
             .onAppear {
                 guard visibleImages.indices.contains(fullscreenIndex) else { return }
@@ -457,14 +491,16 @@ struct ImageGridView: View {
         dragSelect = nil
     }
 
-    /// The cell under a point in the grid's own coordinates (3 square
-    /// columns, 1pt apart), clamped to the cells that exist.
+    /// The cell under a point in the grid's own coordinates (square
+    /// columns 1pt apart, as many as `columnCount` gives for this width),
+    /// clamped to the cells that exist.
     private func gridIndex(at point: CGPoint, width: CGFloat) -> Int? {
         guard width > 0, !visibleImages.isEmpty else { return nil }
-        let pitch = (width - 2) / 3 + 1
-        let column = min(2, max(0, Int(point.x / pitch)))
+        let count = Self.columnCount(for: width)
+        let pitch = (width - CGFloat(count - 1)) / CGFloat(count) + 1
+        let column = min(count - 1, max(0, Int(point.x / pitch)))
         let row = max(0, Int(point.y / pitch))
-        return min(visibleImages.count - 1, row * 3 + column)
+        return min(visibleImages.count - 1, row * count + column)
     }
 
     private var fullscreenContent: some View {
@@ -687,6 +723,9 @@ private struct ThumbnailCell: View {
     private var badgeText: String {
         if let size = loader.trueSize(of: image) {
             return "\(image.formatLabel) \(Int(size.width))×\(Int(size.height))"
+        }
+        if image.originalPageURL != nil {
+            return "\(image.formatLabel) 原寸予定"
         }
         if image.renderedURL != nil {
             return "\(image.formatLabel) 原寸"

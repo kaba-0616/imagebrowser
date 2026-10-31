@@ -14,8 +14,20 @@ struct PageImage: Identifiable, Hashable, Codable {
     /// on -- "cover" (a Flutter app's og:image) or "video" (a video
     /// message's poster frame), "tutorial"/"splash" (the site's own UI
     /// pictures), "other" (on an Instagram post, pictures inside links to
-    /// other posts or profiles). nil for everything shown normally.
+    /// other posts or profiles; elsewhere related-article tiles, banners and
+    /// other site furniture), "source" (named only in the page's markup
+    /// text). nil for everything shown normally.
     var excluded: String? = nil
+    /// Which test filed this under "other" (別投稿リンク, 囲みの名前,
+    /// 名前が部品, ...) -- shown in the fullscreen info so a wrongly hidden
+    /// picture says why. nil unless `excluded == "other"`.
+    var excludedWhy: String? = nil
+    /// その写真だけを載せている個別ページ。一覧に並んでいるのが小さな
+    /// サムネイルで、原寸のURLがその個別ページの og:image にしか無い
+    /// ギャラリー(oricon の写真一覧)で埋まる。保存・拡大の瞬間に、
+    /// 選ばれた分だけ OriginalPageResolver が読む(ImageSaverから移植)。
+    /// これが付いている画像は大きさで隠さない: 手元の寸法はサムネイルのもの。
+    var originalPageURL: URL? = nil
 
     var excludedLabel: String? {
         switch excluded {
@@ -24,6 +36,7 @@ struct PageImage: Identifiable, Hashable, Codable {
         case "tutorial": return "操作説明の画像"
         case "splash": return "起動画面のロゴ"
         case "other": return "別の投稿の画像"
+        case "source": return "ソース内の画像"
         case "icon": return "アイコン・UI部品"
         case nil: return nil
         default: return "除外"
@@ -56,6 +69,8 @@ private struct RawImage: Decodable {
     let rendered: URL?
     let origin: String?
     let excluded: String?
+    let why: String?
+    let page: URL?
 }
 
 enum PageImageDecoding {
@@ -70,7 +85,9 @@ enum PageImageDecoding {
                 height: Int(item.height ?? 0),
                 renderedURL: item.rendered,
                 origin: item.origin ?? "dom",
-                excluded: item.excluded
+                excluded: item.excluded,
+                excludedWhy: item.why,
+                originalPageURL: item.page
             )
         }
     }

@@ -15,16 +15,27 @@ final class ImageLoader: ObservableObject {
     @Published private(set) var failed: Set<Int> = []
     @Published private(set) var pixelSizes: [Int: CGSize] = [:]
     @Published private(set) var measuredFrom: [Int: URL] = [:]
+    /// 原寸が個別ページにしか書かれていない写真について、そのページから
+    /// 読み取れた原寸のURL。全画面表示したときに埋まる。
+    @Published private(set) var resolvedOriginals: [Int: URL] = [:]
 
     func trueSize(of image: PageImage) -> CGSize? {
         guard let size = pixelSizes[image.id] else { return nil }
+        if image.originalPageURL != nil {
+            // 手元の寸法が一覧のサムネイルのものである限り、保存される
+            // 写真の大きさを名乗ってはいけない。
+            guard let original = resolvedOriginals[image.id],
+                  measuredFrom[image.id] == original else { return nil }
+            return size
+        }
         guard image.renderedURL == nil || measuredFrom[image.id] == image.url else { return nil }
         return size
     }
 
     private func record(_ pixelSize: CGSize?, for image: PageImage, from url: URL) {
         guard let pixelSize else { return }
-        if measuredFrom[image.id] == image.url, url != image.url { return }
+        let best = resolvedOriginals[image.id] ?? image.url
+        if measuredFrom[image.id] == best, url != best { return }
         measuredFrom[image.id] = url
         pixelSizes[image.id] = pixelSize
     }
@@ -150,9 +161,22 @@ final class ImageLoader: ObservableObject {
             await self.fullImageSemaphore.wait()
             defer { Task { await self.fullImageSemaphore.signal() } }
 
+            // 原寸が個別ページにしか書かれていない写真は、拡大して見る
+            // この瞬間にそのページを読む(見ている1枚だけ)。
+            var preferred = pageImage.url
+            if let page = pageImage.originalPageURL {
+                let outcome = await OriginalPageResolver.shared.original(
+                    forPage: page, thumbnail: pageImage.url)
+                if let note = outcome.note { AppLog.log(note, isError: true) }
+                if let original = outcome.original {
+                    self.resolvedOriginals[id] = original
+                    preferred = original
+                }
+            }
+
             if !Task.isCancelled,
                let (decoded, pixelSize, from) = try? await self.download(
-                   pageImage, preferring: pageImage.url, maxPixelSize: maxPixelSize) {
+                   pageImage, preferring: preferred, maxPixelSize: maxPixelSize) {
                 self.storeFullImage(decoded, for: id)
                 self.record(pixelSize, for: pageImage, from: from)
             }

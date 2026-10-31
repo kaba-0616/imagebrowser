@@ -72,8 +72,23 @@ struct FullscreenPreviewView: View {
     }
 
     private var infoText: String {
+        let base = sizeText
+        // 既定で隠れている画像は、なぜ隠れたのかを添える(判定の外れに
+        // 気づけるように)。
+        if let label = image.excludedLabel {
+            return base + "  " + label + (image.excludedWhy.map { "(\($0))" } ?? "")
+        }
+        return base
+    }
+
+    private var sizeText: String {
         if let size = loader.trueSize(of: image) {
             return "\(image.formatLabel)  \(Int(size.width))×\(Int(size.height))"
+        }
+        // 原寸が別ページにある写真。見えているのは一覧のサムネイルで、
+        // いまその個別ページを読んで原寸に差し替えている最中。
+        if image.originalPageURL != nil {
+            return "\(image.formatLabel)  原寸を読み込み中…"
         }
         if image.renderedURL != nil {
             return "\(image.formatLabel)  原寸"
