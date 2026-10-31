@@ -37,10 +37,10 @@ struct SettingsView: View {
                     HStack {
                         Text("現在のプラン")
                         Spacer()
-                        Text(store.isPro ? "Pro" : "無料")
+                        Text(store.hasPurchasedPro ? "Pro" : "無料")
                             .foregroundColor(.secondary)
                     }
-                    if !store.isPro {
+                    if !store.hasPurchasedPro {
                         Button("Proにアップグレード") { showPaywall = true }
                     }
                     Button {
@@ -48,7 +48,7 @@ struct SettingsView: View {
                             isRestoring = true
                             await store.restorePurchases()
                             isRestoring = false
-                            restoreMessage = store.isPro ? "Proが復元されました" : "復元できる購入が見つかりませんでした"
+                            restoreMessage = store.hasPurchasedPro ? "Proが復元されました" : "復元できる購入が見つかりませんでした"
                         }
                     } label: {
                         if isRestoring {

@@ -16,6 +16,10 @@ enum ProProduct: String, CaseIterable {
 final class StoreManager: ObservableObject {
 
     @Published private(set) var isPro = false
+    /// The real purchase state, unaffected by `ignoreProForTesting` -- the
+    /// settings screen's "現在のプラン" shows this, so turning the test
+    /// switch on doesn't make a purchase look gone (user request).
+    @Published private(set) var hasPurchasedPro = false
     /// `isPro == false` alone can't tell "not Pro" from "the first
     /// entitlement check hasn't come back yet" -- the launch splash waits on
     /// this so a Pro user never sees the ad banner flash (same as ImageKeeper).
@@ -103,14 +107,16 @@ final class StoreManager: ObservableObject {
                 found = true
             }
         }
-        isPro = (found || Self.isSimulator) && !proSuppressed
+        hasPurchasedPro = found || Self.isSimulator
+        isPro = hasPurchasedPro && !proSuppressed
         hasCheckedEntitlements = true
     }
 
     private func handle(_ verification: VerificationResult<Transaction>) async {
         guard case .verified(let transaction) = verification else { return }
-        if ProProduct(rawValue: transaction.productID) != nil, !proSuppressed {
-            isPro = true
+        if ProProduct(rawValue: transaction.productID) != nil {
+            hasPurchasedPro = true
+            if !proSuppressed { isPro = true }
         }
         await transaction.finish()
     }
