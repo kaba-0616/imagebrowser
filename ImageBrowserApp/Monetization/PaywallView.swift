@@ -1,9 +1,8 @@
 import SwiftUI
 import StoreKit
 
-/// Shown when a free user taps the bulk-extract button. Offers the lifetime
-/// purchase and either subscription; any one of them flips the same
-/// `isPro` flag.
+/// Shown when a free user taps the bulk-extract button. Offers the monthly
+/// and yearly subscriptions; either one flips the same `isPro` flag.
 struct PaywallView: View {
     @ObservedObject var store: StoreManager
     let onClose: () -> Void
@@ -117,13 +116,13 @@ struct PaywallView: View {
         }
     }
 
-    /// Lifetime first (the simplest choice for someone who just wants the
-    /// feature once), then subscriptions.
+    /// In `ProProduct.forSale` order: monthly, then yearly.
     private var sortedProducts: [Product] {
-        store.products.sorted { lhs, rhs in
-            (ProProduct(rawValue: lhs.id)?.isSubscription ?? false ? 1 : 0)
-                < (ProProduct(rawValue: rhs.id)?.isSubscription ?? false ? 1 : 0)
-        }
+        store.products.sorted { order(of: $0) < order(of: $1) }
+    }
+
+    private func order(of product: Product) -> Int {
+        ProProduct(rawValue: product.id).flatMap { ProProduct.forSale.firstIndex(of: $0) } ?? .max
     }
 
     private func productRow(_ product: Product) -> some View {
