@@ -6,3 +6,8 @@ ImageBrowser.xcodeproj/
 ImageBrowserApp/Info.plist
 build/
 .DS_Store
+
+# シミュレータ撮影の生成物(tools/simcheck)
+tools/simcheck/Drive.xcodeproj/
+tools/simcheck/att/
+tools/simcheck/result.xcresult/

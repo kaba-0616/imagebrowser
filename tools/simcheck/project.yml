@@ -1,0 +1,21 @@
+name: Drive
+options:
+  bundleIdPrefix: jp.kaba.drive
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  DriveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [DriveUITests]
+    info:
+      path: DriveUITests/Info.plist
+    settings:
+      TEST_TARGET_NAME: ""
+schemes:
+  DriveUITests:
+    build:
+      targets:
+        DriveUITests: [test]
+    test:
+      targets: [DriveUITests]
