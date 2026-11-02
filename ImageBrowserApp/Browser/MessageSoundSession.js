@@ -5,18 +5,23 @@
 // 無視するので、効果音のときだけ Audio Session API を ambient にする。ボイスや
 // 動画は操作して再生するものなので、これまで通りマナーモードでも鳴らす。
 //
+// 効果音はファイルの URL ではなく、中身を埋め込んだ data: で再生される
+// (1.5.1(0.2) の実機ログで確認)。ボイスは CDN の URL なので data: で見分ける。
+//
 // 失敗しても再生そのものは止めない。効いたかどうかは「ログ」で確かめられる。
 (function () {
     "use strict";
     if (window.__ImageBrowserSoundSession) { return; }
     window.__ImageBrowserSoundSession = true;
-    if (!/^message\./.test(location.hostname)) { return; }
+    if (!/^message\.|^service\.yodel-app\.com$/.test(location.hostname)) { return; }
 
-    var EFFECT = /\/assets\/sound\//;
+    var EFFECT = /^data:|\/assets\/sound\//;
     var reported = {};
 
     function report(src, effect) {
-        var name = src.split("?")[0].split("/").pop();
+        var name = /^data:/.test(src)
+            ? src.slice(0, src.indexOf(",")) + " " + src.length + "文字"
+            : src.split("?")[0].split("/").pop();
         if (reported[name]) { return; }
         reported[name] = true;
         try {
