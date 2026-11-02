@@ -119,6 +119,12 @@ final class WebViewController: NSObject, ObservableObject {
                 WKUserScript(source: tap, injectionTime: .atDocumentStart, forMainFrameOnly: false)
             )
         }
+        // Has to run before the page's first play() (see MessageSoundSession.js).
+        if let sound = WebViewController.loadBundledScript(named: "MessageSoundSession") {
+            userContentController.addUserScript(
+                WKUserScript(source: sound, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+            )
+        }
         configuration.userContentController = userContentController
 
         webView = WKWebView(frame: .zero, configuration: configuration)
@@ -1387,6 +1393,13 @@ extension WebViewController: WKScriptMessageHandler {
         }
         guard let body = message.body as? [String: Any] else { return }
         let kind = body["kind"] as? String ?? "api"
+        if kind == "sound" {
+            let name = body["name"] as? String ?? "?"
+            let effect = body["effect"] as? Bool ?? false
+            let session = body["session"] as? String ?? "?"
+            AppLog.log("音声再生: \(name) 効果音:\(effect ? "はい" : "いいえ") AudioSession:\(session)")
+            return
+        }
         let rawURL = body["url"] as? String ?? ""
         let total = body["total"] as? Int ?? 0
         let images = (body["images"] as? [String] ?? []).compactMap(URL.init(string:))
