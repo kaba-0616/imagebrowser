@@ -23,6 +23,9 @@ final class StoreManager: ObservableObject {
     /// settings screen's "現在のプラン" shows this, so turning the test
     /// switch on doesn't make a purchase look gone (user request).
     @Published private(set) var hasPurchasedPro = false
+    /// Which product `hasPurchasedPro` comes from -- the plan list marks it
+    /// as "現在のプラン". Like `hasPurchasedPro`, ignores `ignoreProForTesting`.
+    @Published private(set) var activeProductID: String?
     /// `isPro == false` alone can't tell "not Pro" from "the first
     /// entitlement check hasn't come back yet" -- the launch splash waits on
     /// this so a Pro user never sees the ad banner flash (same as ImageKeeper).
@@ -103,14 +106,18 @@ final class StoreManager: ObservableObject {
     }
 
     private func refreshEntitlements() async {
-        var found = false
+        var activeID: String?
         for await result in Transaction.currentEntitlements {
-            if case .verified(let transaction) = result,
-               ProProduct(rawValue: transaction.productID) != nil {
-                found = true
+            guard case .verified(let transaction) = result,
+                  let found = ProProduct(rawValue: transaction.productID) else { continue }
+            // 買い切りとサブスクの両方を持つ人は、買い切りを優先して見せる
+            // (サブスクを解約しても Pro のままなので)。
+            if found == .lifetime || activeID == nil {
+                activeID = transaction.productID
             }
         }
-        hasPurchasedPro = found || Self.isSimulator
+        activeProductID = activeID
+        hasPurchasedPro = activeID != nil || Self.isSimulator
         isPro = hasPurchasedPro && !proSuppressed
         hasCheckedEntitlements = true
     }
@@ -122,5 +129,6 @@ final class StoreManager: ObservableObject {
             if !proSuppressed { isPro = true }
         }
         await transaction.finish()
+        await refreshEntitlements()
     }
 }
