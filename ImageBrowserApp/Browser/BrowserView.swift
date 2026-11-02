@@ -325,6 +325,7 @@ private struct BrowserTabContentView: View {
 
     private func handleExtractTap() {
         guard store.isPro else {
+            UsageStats.paywallShown(page: URL(string: controller.urlString), from: "extract")
             showPaywall = true
             return
         }
@@ -336,6 +337,7 @@ private struct BrowserTabContentView: View {
     private func watchAdForOneExtraction() async -> RewardedAdManager.Outcome {
         var outcome = await RewardedAdManager.shared.show()
         AppLog.log("リワード広告の結果: \(outcome)")
+        UsageStats.rewardedAd(outcome: "\(outcome)")
         // No ad to show (no fill, offline, or the AdMob account suspension
         // of 2026-10-28): run the extraction anyway instead of blocking the
         // user on something they cannot fix. Closing a shown ad early still
@@ -360,9 +362,12 @@ private struct BrowserTabContentView: View {
         do {
             extractedImages = try await controller.extractImages(withBackgrounds: true)
             AppLog.log("一括抽出結果: \(extractedImages.count)件")
+            UsageStats.extracted(page: URL(string: controller.urlString), total: extractedImages.count,
+                                 shown: extractedImages.filter { $0.excluded == nil }.count)
             showGrid = true
         } catch {
             AppLog.log("一括抽出失敗: \(error.localizedDescription)", isError: true)
+            UsageStats.extractFailed(page: URL(string: controller.urlString))
             extractionError = "ページから画像を読み取れませんでした。"
         }
     }
@@ -397,7 +402,7 @@ private struct BrowserTabContentView: View {
                 return
             }
             AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")
-            await longPressSaver.save([original])
+            await longPressSaver.save([original], page: URL(string: controller.urlString), kind: "longpress_match")
             if case .finished(let succeeded, _, let message) = longPressSaver.state, succeeded == 0 {
                 longPressNotice = "保存に失敗しました。\(message ?? "")"
             }
@@ -406,7 +411,7 @@ private struct BrowserTabContentView: View {
 
     private func saveSingle(_ url: URL) {
         let image = PageImage(id: 0, url: url, width: 0, height: 0, renderedURL: nil, origin: "dom")
-        Task { await longPressSaver.save([image]) }
+        Task { await longPressSaver.save([image], page: URL(string: controller.urlString), kind: "longpress") }
     }
 
     /// Prefers appearing above the touch point (matching Safari), flipping

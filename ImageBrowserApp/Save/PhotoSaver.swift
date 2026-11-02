@@ -40,7 +40,15 @@ final class PhotoSaver: ObservableObject {
         return URLSession(configuration: config)
     }()
 
-    func save(_ images: [PageImage]) async {
+    /// `page` / `kind` are only for UsageStats (which site, which way).
+    func save(_ images: [PageImage], page: URL? = nil, kind: String = "bulk") async {
+        await saveImages(images)
+        if case .finished(let succeeded, let failed, _) = state {
+            UsageStats.saved(page: page, kind: kind, succeeded: succeeded, failed: failed)
+        }
+    }
+
+    private func saveImages(_ images: [PageImage]) async {
         log.removeAll()
 
         guard !images.isEmpty else {

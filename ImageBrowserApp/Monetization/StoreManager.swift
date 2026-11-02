@@ -92,6 +92,7 @@ final class StoreManager: ObservableObject {
         let result = try await product.purchase()
         switch result {
         case .success(let verification):
+            if case .verified = verification { UsageStats.purchased(productID: product.id) }
             await handle(verification)
         case .userCancelled, .pending:
             break
@@ -117,6 +118,7 @@ final class StoreManager: ObservableObject {
             }
         }
         activeProductID = activeID
+        UsageStats.setPlan(activeID)
         hasPurchasedPro = activeID != nil || Self.isSimulator
         isPro = hasPurchasedPro && !proSuppressed
         hasCheckedEntitlements = true

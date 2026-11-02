@@ -558,7 +558,7 @@ struct ImageGridView: View {
                 Button {
                     let targets = selectedVisible
                     Task {
-                        await photoSaver.save(targets)
+                        await photoSaver.save(targets, page: pageURL, kind: "bulk")
                         selected.subtract(photoSaver.savedImageIDs)
                     }
                 } label: {
@@ -620,6 +620,7 @@ struct ImageGridView: View {
 
     private func startHistoryLoad() {
         guard store.isPro else {
+            UsageStats.paywallShown(page: pageURL, from: "history")
             showPaywall = true
             return
         }

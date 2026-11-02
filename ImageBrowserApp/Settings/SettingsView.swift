@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var showSaveLog = false
     @State private var adBlockEnabled = AdBlockStore.isEnabled
     @State private var verboseDiagnostics = DiagnosticsStore.isVerbose
+    @State private var usageStatsEnabled = UsageStats.isEnabled
 
     var body: some View {
         NavigationView {
@@ -73,6 +74,20 @@ struct SettingsView: View {
                     } footer: {
                         Text("無料ユーザーの動作(広告・リワード広告など)を確認するための設定です。購入は取り消されません。")
                     }
+                }
+
+                Section {
+                    Toggle("利用状況を送信する", isOn: Binding(
+                        get: { usageStatsEnabled },
+                        set: {
+                            usageStatsEnabled = $0
+                            UsageStats.isEnabled = $0
+                        }
+                    ))
+                } header: {
+                    Text("改善へのご協力")
+                } footer: {
+                    Text("画像の抽出・保存を行ったサイトのドメイン(例: sakurazaka46.com)と件数、購入の有無を送信し、対応サイトの改善に使います。ページのURL・画像・入力内容は送信しません。")
                 }
 
                 Section("サポート") {

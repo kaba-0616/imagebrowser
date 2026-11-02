@@ -27,6 +27,9 @@ packages:
   SwiftDraw:
     url: https://github.com/swhitty/SwiftDraw.git
     exactVersion: 0.18.3
+  Firebase:
+    url: https://github.com/firebase/firebase-ios-sdk.git
+    from: 12.0.0
   GoogleMobileAds:
     url: https://github.com/googleads/swift-package-manager-google-mobile-ads.git
     from: 13.0.0
@@ -50,6 +53,13 @@ targets:
         NSPhotoLibraryAddUsageDescription: "抽出した画像をカメラロールに保存するために使用します。"
         # imagebrowser用にAdMobコンソールで発行した実App ID。
         GADApplicationIdentifier: "ca-app-pub-1034383442757151~4077627135"
+        # 利用状況の計測(UsageStats)は広告に使わない: 広告IDを集めず、広告の
+        # 個人化にも回さない。GoogleService-Info.plist は公開リポジトリに置かず、
+        # imagebrowser-signing/firebase からアップロード時に入れる。
+        GOOGLE_ANALYTICS_ADID_COLLECTION_ENABLED: false
+        GOOGLE_ANALYTICS_DEFAULT_ALLOW_AD_PERSONALIZATION_SIGNALS: false
+        GOOGLE_ANALYTICS_REGISTRATION_WITH_AD_NETWORK_ENABLED: false
+        FirebaseAutomaticScreenReportingEnabled: false
         NSUserTrackingUsageDescription: "広告の表示に使う情報の取得許可をお願いします。許可しなくても広告自体は表示されますが、内容の関連性が下がります。"
         SKAdNetworkItems:
           - SKAdNetworkIdentifier: 22mmun2rn5.skadnetwork
@@ -125,12 +135,14 @@ targets:
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
         MARKETING_VERSION: "1.5.1"
-        CURRENT_PROJECT_VERSION: "0.4"
+        CURRENT_PROJECT_VERSION: "0.5"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:
       - package: SwiftDraw
       - package: GoogleMobileAds
+      - package: Firebase
+        product: FirebaseAnalytics
 
 schemes:
   ImageBrowserApp:

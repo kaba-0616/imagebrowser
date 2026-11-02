@@ -4,6 +4,10 @@ import SwiftUI
 struct ImageBrowserApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        UsageStats.start()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

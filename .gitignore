@@ -11,3 +11,6 @@ build/
 tools/simcheck/Drive.xcodeproj/
 tools/simcheck/att/
 tools/simcheck/result.xcresult/
+
+# Firebase の設定(公開リポジトリに置かない。imagebrowser-signing/firebase が原本)
+ImageBrowserApp/GoogleService-Info.plist
