@@ -8,6 +8,7 @@
 5244x2950、PNG はアルファ無し。**処理が終わる前に placement は作れない。**
 
     python3 -I tools/upload_store_assets.py <アプリID> <ローカリゼーションID>
+    python3 -I tools/upload_store_assets.py <アプリID> <ローカリゼーションID> header  # ヘッダだけ差し替える
 
 asc.py(JWT で API を叩く)は oshicount/tools にある。
 """
@@ -67,6 +68,15 @@ def upload_creative(rel, placement):
     print(rel, a["state"], p["attributes"]["state"])
 
 
+def replace_header():
+    """差し替えは先に placement を消す(残っていると 409)。"""
+    rel, placement = CREATIVE[0]
+    for p in api("GET", f"/v1/appStoreVersionLocalizations/{LOC}/placements?limit=50")["data"]:
+        if p["attributes"]["placementType"] == placement:
+            api("DELETE", f"/v1/appAssetLibraryPlacements/{p['id']}")
+    upload_creative(rel, placement)
+
+
 def upload_duo():
     sets = api("GET", f"/v1/appStoreVersionLocalizations/{LOC}/appScreenshotSets?limit=20")["data"]
     sid = next((s["id"] for s in sets if s["attributes"]["screenshotDisplayType"] == "APP_IPHONE_DUO"), None)
@@ -89,6 +99,9 @@ def upload_duo():
         print(rel, "uploaded")
 
 
-upload_duo()
-for rel, placement in CREATIVE:
-    upload_creative(rel, placement)
+if sys.argv[3:] == ["header"]:
+    replace_header()
+else:
+    upload_duo()
+    for rel, placement in CREATIVE:
+        upload_creative(rel, placement)

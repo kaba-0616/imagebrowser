@@ -14,6 +14,7 @@ Duo とプロダクトページは SVG が原本。文言や色を直すとき�
 ```
 python3 tools/gen_store_assets.py
 cd ストア掲載用
+swift ../tools/svg2png.swift プロダクトページ/header-5244x2950.svg プロダクトページ/header-5244x2950.png 5244 2950
 swift ../tools/svg2png.swift プロダクトページ/search-1920x1280.svg プロダクトページ/search-1920x1280.png 1920 1280
 swift ../tools/svg2png.swift Duo/Duo_IB_1.svg Duo/Duo_IB_1.png 1398 2034
 ```
@@ -22,4 +23,5 @@ Duo の端末画面は `tools/simcheck/run_shots.sh <Duo の UDID> <出力先>` 
 `Duo/src/` に置く。先にシミュレータ向けに `-derivedDataPath build/sim` でビルドしておく。
 内側の画面はシミュレータでは撮れない(`ios-dev-playbook.md`)。
 
-ASC へは `tools/upload_store_assets.py`。ヘッダは差し替えるなら先に placement を消す。
+ASC へは `tools/upload_store_assets.py`。ヘッダだけ差し替えるときは末尾に `header` を付ける
+(先に placement を消してから上げ直す)。
