@@ -11,8 +11,9 @@ struct PlanListView: View {
     @State private var errorMessage: String?
 
     /// Apple's standard EULA -- the same one the App Store description links.
-    private static let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
-    private static let privacyURL = URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!
+    /// PaywallView も同じリンクを出す。
+    static let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+    static let privacyURL = URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!
 
     private var ownsLifetime: Bool { store.activeProductID == ProProduct.lifetime.rawValue }
 
@@ -86,7 +87,7 @@ struct PlanListView: View {
                 Text(product.displayName)
                     .font(.headline)
                 Spacer()
-                Text(product.displayPrice + periodSuffix(product))
+                Text(product.displayPrice + Self.periodSuffix(product))
                     .font(.subheadline.weight(.semibold))
             }
             Text(product.description)
@@ -109,7 +110,7 @@ struct PlanListView: View {
 
     /// "/月" etc. -- the subscription length is one of the items Guideline
     /// 3.1.2(c) requires to be shown in the app, not just the price.
-    private func periodSuffix(_ product: Product) -> String {
+    static func periodSuffix(_ product: Product) -> String {
         guard let period = product.subscription?.subscriptionPeriod else { return "" }
         let unit: String
         switch period.unit {

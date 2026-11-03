@@ -1,5 +1,6 @@
 import UIKit
 import Photos
+import ImageIO
 
 /// Simplified from ImageSaver's extension-target PhotoSaver: an app-body
 /// process can raise the Photos permission prompt directly (only an Action
@@ -45,6 +46,7 @@ final class PhotoSaver: ObservableObject {
         await saveImages(images)
         if case .finished(let succeeded, let failed, _) = state {
             UsageStats.saved(page: page, kind: kind, succeeded: succeeded, failed: failed)
+            if succeeded > 0 { ReviewPrompt.recordSuccess() }
         }
     }
 
@@ -90,11 +92,12 @@ final class PhotoSaver: ObservableObject {
         for image in images {
             let name = image.url.lastPathComponent
 
+            lastDateWasFuture = false
             switch await saveOne(image) {
             case .success:
                 succeeded += 1
                 savedImageIDs.insert(image.id)
-                appendLog("OK: \(name)")
+                appendLog("OK: \(name)" + (lastDateWasFuture ? " [日時が未来だったので保存時刻にした]" : ""))
             case .failure(let error):
                 failed += 1
                 lastError = error.localizedDescription
@@ -147,6 +150,7 @@ final class PhotoSaver: ObservableObject {
             try await addToLibrary(data: data, fileExtension: "png")
             appendLog("完了: 成功1 失敗0")
             state = .finished(succeeded: 1, failed: 0, message: nil)
+            ReviewPrompt.recordSuccess()
         } catch {
             appendLog("失敗: \(error.localizedDescription)", isError: true)
             state = .finished(succeeded: 0, failed: 1, message: error.localizedDescription)
@@ -225,13 +229,57 @@ final class PhotoSaver: ObservableObject {
         return data
     }
 
+    /// 写真アプリの「日時」は元画像の EXIF で決まる。ストア系サイトの JPEG には
+    /// 配信元の時計がずれた未来の DateTimeDigitized が入っていることがあり
+    /// (DateTimeOriginal が無いと写真アプリはこれを使う)、そのままだと写真一覧の
+    /// 先頭に居座る。未来のときだけ保存した時刻に差し替え、過去の値は撮影日として
+    /// 残す。スナップショット保存(自前の PNG)は EXIF が無いので何も起きない。
     private func addToLibrary(data: Data, fileExtension: String) async throws {
+        let fixedDate = Self.futureDateFix(for: data)
         try await PHPhotoLibrary.shared().performChanges {
             let request = PHAssetCreationRequest.forAsset()
             let options = PHAssetResourceCreationOptions()
             options.originalFilename = "ImageBrowser-\(UUID().uuidString).\(fileExtension)"
             request.addResource(with: .photo, data: data, options: options)
+            if let fixedDate {
+                request.creationDate = fixedDate
+            }
         }
+        lastDateWasFuture = fixedDate != nil
+    }
+
+    private var lastDateWasFuture = false
+
+    private static func futureDateFix(for data: Data) -> Date? {
+        let now = Date()
+        guard let taken = exifDate(in: data), taken > now else { return nil }
+        return now
+    }
+
+    private static let exifDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter
+    }()
+
+    private static func exifDate(in data: Data) -> Date? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        else { return nil }
+        let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+        // 写真アプリが見るのと同じ順。original が無ければ digitized、
+        // それも無ければ TIFF の DateTime。
+        let candidates = [
+            exif?[kCGImagePropertyExifDateTimeOriginal] as? String,
+            exif?[kCGImagePropertyExifDateTimeDigitized] as? String,
+            tiff?[kCGImagePropertyTIFFDateTime] as? String,
+        ]
+        for text in candidates.compactMap({ $0 }) {
+            if let date = exifDateFormatter.date(from: text) { return date }
+        }
+        return nil
     }
 }
 

@@ -92,10 +92,23 @@ struct PaywallView: View {
                     .font(.footnote)
                     .disabled(purchasing != nil)
 
+                    // Guideline 3.1.2(c): 期間・自動更新・利用規約・プライバシーポリシーを
+                    // 購入画面そのものに出す(PlanListView と同じ内容)。
+                    Text("サブスクリプションは自動更新されます。いつでも「設定」アプリの自分のApple IDからキャンセルできます。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+
                     Link("プランの変更・解約は「設定」アプリのサブスクリプションから行えます", destination: URL(string: "itms-apps://apps.apple.com/account/subscriptions")!)
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
+
+                    HStack(spacing: 16) {
+                        Link("利用規約(EULA)", destination: PlanListView.termsURL)
+                        Link("プライバシーポリシー", destination: PlanListView.privacyURL)
+                    }
+                    .font(.caption)
                 }
                 .padding()
             }
@@ -138,7 +151,7 @@ struct PaywallView: View {
             if purchasing == product.id {
                 ProgressView()
             } else {
-                Text(product.displayPrice)
+                Text(product.displayPrice + PlanListView.periodSuffix(product))
                     .font(.headline)
             }
         }
