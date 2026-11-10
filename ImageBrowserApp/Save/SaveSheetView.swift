@@ -114,7 +114,7 @@ struct SaveSheetView: View {
             if newValue.isAudioOnly { destination = .files }
         }
         .sheet(item: Binding(get: { exportFile.map(ExportItem.init) }, set: { if $0 == nil { exportFile = nil } })) { item in
-            FilesExporter(file: item.url) { exported in
+            FilesExporter(files: [item.url]) { exported in
                 AppLog.log("ファイルへの書き出し: \(exported ? "完了" : "取り消し")")
                 exportFile = nil
                 saver.cleanUp()
@@ -221,13 +221,13 @@ struct SaveSheetView: View {
     }
 }
 
-/// The system "save to Files" sheet for one finished file.
+/// The system "save to Files" sheet for finished files (one folder for all).
 struct FilesExporter: UIViewControllerRepresentable {
-    let file: URL
+    let files: [URL]
     let onFinish: (Bool) -> Void
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forExporting: [file], asCopy: true)
+        let picker = UIDocumentPickerViewController(forExporting: files, asCopy: true)
         picker.delegate = context.coordinator
         return picker
     }

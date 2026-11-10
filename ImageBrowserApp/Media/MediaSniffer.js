@@ -122,17 +122,31 @@
     };
 
     // ---- 2. / 3. 要素 ----
+    // 遅延読み込みのプレイヤーは、画面に入るまで src を空にして別の属性に置いている。
+    var LAZY_ATTRS = ["data-src", "data-video-src", "data-video", "data-lazy-src", "data-original"];
+
+    function elementURLs(el) {
+        var urls = [];
+        if (!el.getAttribute) { return urls; }
+        if (el.getAttribute("src")) { urls.push(el.getAttribute("src")); }
+        for (var i = 0; i < LAZY_ATTRS.length; i++) {
+            var v = el.getAttribute(LAZY_ATTRS[i]);
+            if (v && MEDIA_URL.test(v)) { urls.push(v); }
+        }
+        return urls;
+    }
+
     function fromElement(el, via) {
         try {
             var audio = el.tagName === "AUDIO";
-            var poster = el.getAttribute && el.getAttribute("poster");
+            var poster = el.getAttribute && (el.getAttribute("poster") || el.getAttribute("data-poster"));
             var duration = el.duration;
             var urls = [];
             if (el.currentSrc) { urls.push(el.currentSrc); }
-            if (el.getAttribute && el.getAttribute("src")) { urls.push(el.getAttribute("src")); }
+            urls = urls.concat(elementURLs(el));
             var sources = el.querySelectorAll ? el.querySelectorAll("source") : [];
             for (var i = 0; i < sources.length; i++) {
-                if (sources[i].getAttribute("src")) { urls.push(sources[i].getAttribute("src")); }
+                urls = urls.concat(elementURLs(sources[i]));
             }
             for (var j = 0; j < urls.length; j++) {
                 // blob:(MediaSource) は中身のURLではない。元のプレイリストは
@@ -156,6 +170,42 @@
         } catch (e) {}
         return true;
     };
+
+    // スクロールで増える一覧(SNS のタイムライン・まとめ記事)は、再生も通信も
+    // 起きないまま <video> だけが足されていく。DOM の変化とスクロールのたびに
+    // (0.6秒にまとめて)探し直し、ツールバーの件数をその場で増やす。
+    var scanTimer = null;
+    function scheduleScan() {
+        if (scanTimer) { return; }
+        scanTimer = setTimeout(function () {
+            scanTimer = null;
+            window.__VideoBrowserScan();
+        }, 600);
+    }
+    try {
+        new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i++) {
+                var m = mutations[i];
+                if (m.type === "attributes") {
+                    if (/^(VIDEO|AUDIO|SOURCE)$/.test(m.target.tagName)) { scheduleScan(); return; }
+                    continue;
+                }
+                for (var j = 0; j < m.addedNodes.length; j++) {
+                    var n = m.addedNodes[j];
+                    if (n.nodeType !== 1) { continue; }
+                    if (/^(VIDEO|AUDIO|SOURCE)$/.test(n.tagName) || (n.querySelector && n.querySelector("video, audio"))) {
+                        scheduleScan();
+                        return;
+                    }
+                }
+            }
+        }).observe(document, {
+            childList: true, subtree: true,
+            attributes: true, attributeFilter: ["src", "poster"].concat(LAZY_ATTRS)
+        });
+    } catch (e) {}
+    window.addEventListener("scroll", scheduleScan, { passive: true, capture: true });
+    document.addEventListener("DOMContentLoaded", scheduleScan);
 
     ["play", "loadedmetadata", "durationchange"].forEach(function (type) {
         document.addEventListener(type, function (ev) {

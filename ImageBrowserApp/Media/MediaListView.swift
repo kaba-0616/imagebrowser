@@ -5,12 +5,16 @@ import SwiftUI
 struct MediaListView: View {
     @ObservedObject var controller: WebViewController
     let onSelect: (DetectedMedia) -> Void
+    /// Several picked in selection mode, in list order.
+    let onSaveSelected: ([DetectedMedia]) -> Void
     let onClose: () -> Void
 
     @State private var talkMedia: [DetectedMedia] = []
     @State private var loadingTalk = false
     @State private var talkError: String?
     @State private var talkFilter = TalkFilter.all
+    @State private var selecting = false
+    @State private var selected: Set<String> = []
 
     enum TalkFilter: String, CaseIterable, Identifiable {
         case all, video, audio
@@ -48,6 +52,17 @@ struct MediaListView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("閉じる") { onClose() }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !selectable.isEmpty || selecting {
+                        Button(selecting ? "キャンセル" : "選択") {
+                            selecting.toggle()
+                            selected = []
+                        }
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if selecting { selectionBar }
             }
         }
         .navigationViewStyle(.stack)
@@ -132,11 +147,51 @@ struct MediaListView: View {
         loadingTalk = false
     }
 
+    /// Everything on screen that can be saved, in list order: this page's,
+    /// then the talk's under the current filter.
+    private var selectable: [DetectedMedia] {
+        guard !controller.isRestrictedSite else { return [] }
+        var seen: Set<String> = []
+        return (controller.detectedMedia + (controller.canListTalkMedia ? filteredTalkMedia : []))
+            .filter { $0.canDownload && seen.insert($0.id).inserted }
+    }
+
+    private var selectionBar: some View {
+        let all = selectable
+        let picked = all.filter { selected.contains($0.id) }
+        let allPicked = !all.isEmpty && picked.count == all.count
+        return HStack {
+            Button(allPicked ? "すべて解除" : "すべて選択") {
+                selected = allPicked ? [] : Set(all.map(\.id))
+            }
+            Spacer()
+            Button {
+                AppLog.log("まとめて保存: \(picked.count)件を選択")
+                onSaveSelected(picked)
+            } label: {
+                Text(picked.isEmpty ? "保存" : "\(picked.count)件を保存").bold()
+            }
+            .disabled(picked.isEmpty)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.bar)
+    }
+
     private func row(_ media: DetectedMedia) -> some View {
         Button {
-            onSelect(media)
+            if selecting {
+                if selected.contains(media.id) { selected.remove(media.id) } else { selected.insert(media.id) }
+            } else {
+                onSelect(media)
+            }
         } label: {
             HStack(spacing: 12) {
+                if selecting {
+                    Image(systemName: selected.contains(media.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundColor(selected.contains(media.id) ? .accentColor : .secondary)
+                }
                 PosterView(url: media.posterURL, isAudio: media.isAudio)
                     .frame(width: 64, height: 40)
                 VStack(alignment: .leading, spacing: 3) {
@@ -153,8 +208,10 @@ struct MediaListView: View {
                     .foregroundColor(.secondary)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: media.canDownload ? "square.and.arrow.down" : "exclamationmark.circle")
-                    .foregroundColor(media.canDownload ? .accentColor : .secondary)
+                if !selecting {
+                    Image(systemName: media.canDownload ? "square.and.arrow.down" : "exclamationmark.circle")
+                        .foregroundColor(media.canDownload ? .accentColor : .secondary)
+                }
             }
         }
         .disabled(!media.canDownload)

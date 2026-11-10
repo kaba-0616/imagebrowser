@@ -72,6 +72,38 @@ final class SaveFlowUITests: XCTestCase {
         XCTAssertTrue(done)
     }
 
+    /// 4. スクロールで <video> が足されるページ(scroll.html)で、一覧を開かなくても
+    ///    バッジの件数が増えること。続けて全部を選んで写真へまとめて保存。
+    func test4_ScrollAndBatch() throws {
+        let app = launch()
+        open(app, "http://localhost:8766/scroll.html")
+        let button = app.buttons["動画・音声を保存"]
+        let before = (button.value as? String) ?? ""
+        shot("4-スクロール前")
+        for _ in 0..<8 { app.webViews.firstMatch.swipeUp(); sleep(1) }
+        sleep(3)
+        let after = (button.value as? String) ?? ""
+        print("SCROLLCHECK before=\(before) after=\(after)")
+        shot("4-スクロール後")
+        XCTAssertNotEqual(before, after)
+
+        button.tap()
+        sleep(3)
+        app.navigationBars.buttons["選択"].tap()
+        sleep(1)
+        app.buttons["すべて選択"].tap()
+        sleep(1)
+        shot("4-選択")
+        app.buttons.matching(NSPredicate(format: "label ENDSWITH '件を保存'")).firstMatch.tap()
+        sleep(3)
+        shot("4-まとめて保存")
+        app.buttons.matching(NSPredicate(format: "label ENDSWITH '件を保存する'")).firstMatch.tap()
+        let done = app.staticTexts["写真に保存しました"].waitForExistence(timeout: 180)
+        shot("4-完了")
+        tree(app, "4-中身")
+        XCTAssertTrue(done)
+    }
+
     // MARK: -
 
     private func launch() -> XCUIApplication {

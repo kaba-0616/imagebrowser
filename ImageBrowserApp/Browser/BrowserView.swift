@@ -80,6 +80,7 @@ private struct BrowserTabContentView: View {
     @State private var showPaywall = false
     @State private var showMediaList = false
     @State private var savingMedia: DetectedMedia?
+    @State private var savingBatch: MediaBatch?
     @State private var showMediaPaywall = false
     @ObservedObject private var adConsent = AdConsent.shared
     @State private var extractionError: String?
@@ -186,7 +187,26 @@ private struct BrowserTabContentView: View {
                         openMediaPaywall()
                     }
                 }
+            }, onSaveSelected: { items in
+                showMediaList = false
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    if store.canSaveMedia {
+                        savingBatch = MediaBatch(items: items)
+                    } else {
+                        openMediaPaywall()
+                    }
+                }
             }, onClose: { showMediaList = false })
+        }
+        .sheet(item: $savingBatch) { batch in
+            BatchSaveView(items: batch.items, controller: controller, store: store, onNeedPlan: {
+                savingBatch = nil
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    openMediaPaywall()
+                }
+            }, onClose: { savingBatch = nil })
         }
         .sheet(item: $savingMedia) { media in
             SaveSheetView(media: media, controller: controller, store: store, onNeedPlan: {
@@ -378,6 +398,7 @@ private struct BrowserTabContentView: View {
             }
         }
         .accessibilityLabel("動画・音声を保存")
+        .accessibilityValue(controller.isRestrictedSite || controller.detectedMedia.isEmpty ? "" : "\(controller.detectedMedia.count)件")
     }
 
     private func openMediaPaywall() {
@@ -555,4 +576,10 @@ private struct LaunchSplashView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground).ignoresSafeArea())
     }
+}
+
+/// The videos/audio picked for "まとめて保存", as a sheet item.
+struct MediaBatch: Identifiable {
+    let id = UUID()
+    let items: [DetectedMedia]
 }
