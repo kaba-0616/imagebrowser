@@ -29,12 +29,15 @@ struct DetectedMedia: Identifiable, Hashable {
     var source: Source = .page
     /// Delivery time of a talk message (ISO 8601).
     var publishedAt: String?
+    /// The file name to offer, when the source decided it (talk messages).
+    var presetName: String?
     let pageURL: URL?
     var foundAt = Date()
 
     /// The file name offered first in the save sheet.
     var suggestedName: String {
-        if source == .talk, let publishedAt, let date = Self.isoFormatter.date(from: publishedAt) ?? Self.isoFormatterPlain.date(from: publishedAt) {
+        if let presetName { return presetName }
+        if source == .talk, let publishedAt, let date = Self.date(publishedAt) {
             return "\(title)_\(Self.nameFormatter.string(from: date))"
         }
         if !title.isEmpty { return title }
@@ -60,6 +63,11 @@ struct DetectedMedia: Identifiable, Hashable {
         return f
     }()
     private static let isoFormatterPlain = ISO8601DateFormatter()
+
+    /// A talk message's ISO 8601 delivery time, with or without fractions.
+    static func date(_ iso: String) -> Date? {
+        isoFormatter.date(from: iso) ?? isoFormatterPlain.date(from: iso)
+    }
     private static let nameFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ja_JP")

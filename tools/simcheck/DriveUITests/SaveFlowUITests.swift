@@ -22,9 +22,18 @@ final class SaveFlowUITests: XCTestCase {
         let app = launch()
         open(app, demoURL)
         openSaveSheet(app, rowContaining: "夕焼けの海")
+        // 保存の前にその場で再生できる(2026-11-11)。
+        app.buttons["プレビューを再生"].tap()
+        sleep(4)
+        shot("1-プレビュー再生")
         app.buttons["保存する"].tap()
         XCTAssertTrue(app.staticTexts["写真に保存しました"].waitForExistence(timeout: 60))
         shot("1-MP4完了")
+        // 「戻る」で一覧へ(保存画面は一覧の上に積まれている)。
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        sleep(2)
+        shot("1-一覧へ戻る")
+        XCTAssertTrue(app.navigationBars["動画・音声"].exists)
     }
 
     func test2_MP3ToFiles() throws {

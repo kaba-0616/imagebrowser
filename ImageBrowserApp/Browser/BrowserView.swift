@@ -79,8 +79,6 @@ private struct BrowserTabContentView: View {
     @State private var showGrid = false
     @State private var showPaywall = false
     @State private var showMediaList = false
-    @State private var savingMedia: DetectedMedia?
-    @State private var savingBatch: MediaBatch?
     @State private var showMediaPaywall = false
     @ObservedObject private var adConsent = AdConsent.shared
     @State private var extractionError: String?
@@ -175,47 +173,15 @@ private struct BrowserTabContentView: View {
             )
         }
         .sheet(isPresented: $showMediaList) {
-            MediaListView(controller: controller, onSelect: { media in
+            MediaListView(controller: controller, store: store, onNeedPlan: {
                 showMediaList = false
-                // The next sheet can't open until the list's dismiss
-                // animation has finished.
+                // The paywall can't open until the list's dismiss animation
+                // has finished.
                 Task {
                     try? await Task.sleep(nanoseconds: 600_000_000)
-                    if store.canSaveMedia {
-                        savingMedia = media
-                    } else {
-                        openMediaPaywall()
-                    }
-                }
-            }, onSaveSelected: { items in
-                showMediaList = false
-                Task {
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    if store.canSaveMedia {
-                        savingBatch = MediaBatch(items: items)
-                    } else {
-                        openMediaPaywall()
-                    }
+                    openMediaPaywall()
                 }
             }, onClose: { showMediaList = false })
-        }
-        .sheet(item: $savingBatch) { batch in
-            BatchSaveView(items: batch.items, controller: controller, store: store, onNeedPlan: {
-                savingBatch = nil
-                Task {
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    openMediaPaywall()
-                }
-            }, onClose: { savingBatch = nil })
-        }
-        .sheet(item: $savingMedia) { media in
-            SaveSheetView(media: media, controller: controller, store: store, onNeedPlan: {
-                savingMedia = nil
-                Task {
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    openMediaPaywall()
-                }
-            }, onClose: { savingMedia = nil })
         }
         .sheet(isPresented: $showMediaPaywall) {
             PaywallView(store: store, forMedia: true, onClose: { showMediaPaywall = false })
@@ -578,8 +544,3 @@ private struct LaunchSplashView: View {
     }
 }
 
-/// The videos/audio picked for "まとめて保存", as a sheet item.
-struct MediaBatch: Identifiable {
-    let id = UUID()
-    let items: [DetectedMedia]
-}

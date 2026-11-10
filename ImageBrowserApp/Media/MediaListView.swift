@@ -1,15 +1,24 @@
 import SwiftUI
 
 /// The videos and audio the open page has used, plus -- on a message app's
-/// talk screen -- every video and voice message of that talk.
+/// talk screen -- the talk's video and voice messages. Saving one (or a
+/// batch) pushes its screen onto this list's navigation, so "戻る" comes back
+/// to the list as it was (user request, 2026-11-11).
 struct MediaListView: View {
     @ObservedObject var controller: WebViewController
-    let onSelect: (DetectedMedia) -> Void
-    /// Several picked in selection mode, in list order.
-    let onSaveSelected: ([DetectedMedia]) -> Void
+    @ObservedObject var store: StoreManager
+    /// Saving needs Pro+: the caller closes the list and shows the paywall.
+    let onNeedPlan: () -> Void
     let onClose: () -> Void
 
     @State private var talkMedia: [DetectedMedia] = []
+    /// IDs of the talk media in the stretch the user scrolled through.
+    @State private var talkScrolled: Set<String> = []
+    /// Off: only the scrolled stretch, like the image extraction (user
+    /// request, 2026-11-11). On: the whole talk.
+    @State private var showWholeTalk = false
+    @State private var pushedMedia: DetectedMedia?
+    @State private var pushedBatch: [DetectedMedia]?
     @State private var loadingTalk = false
     @State private var talkError: String?
     @State private var talkFilter = TalkFilter.all
@@ -69,6 +78,7 @@ struct MediaListView: View {
             .safeAreaInset(edge: .bottom) {
                 if selecting { selectionBar }
             }
+            .background(navigationLinks)
         }
         .navigationViewStyle(.stack)
         .task {
@@ -125,24 +135,42 @@ struct MediaListView: View {
                     ForEach(TalkFilter.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                if !showWholeTalk && talkScrolled.isEmpty {
+                    Text("トークを上へスクロールすると、さかのぼった範囲の動画・音声がここに出ます。")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
                 ForEach(filteredTalkMedia) { media in
                     row(media)
                 }
+                Button {
+                    showWholeTalk.toggle()
+                    selected = []
+                    AppLog.log("トークの動画・音声: \(showWholeTalk ? "トーク全体" : "スクロールした範囲")を表示")
+                } label: {
+                    Label(showWholeTalk ? "スクロールした範囲だけ表示" : "トーク全体を表示(全\(talkMedia.count)件)",
+                          systemImage: showWholeTalk ? "arrow.up.and.down.text.horizontal" : "list.bullet")
+                }
             }
         } header: {
-            Text("このトーク")
+            Text(showWholeTalk ? "このトーク(全体)" : "このトーク(スクロールした範囲)")
         } footer: {
             if !talkMedia.isEmpty {
-                Text("動画\(talkMedia.filter { !$0.isAudio }.count)件・音声\(talkMedia.filter(\.isAudio).count)件(新しい順)")
+                let shown = scopedTalkMedia
+                Text("動画\(shown.filter { !$0.isAudio }.count)件・音声\(shown.filter(\.isAudio).count)件(新しい順)")
             }
         }
     }
 
+    private var scopedTalkMedia: [DetectedMedia] {
+        showWholeTalk ? talkMedia : talkMedia.filter { talkScrolled.contains($0.id) }
+    }
+
     private var filteredTalkMedia: [DetectedMedia] {
         switch talkFilter {
-        case .all: return talkMedia
-        case .video: return talkMedia.filter { !$0.isAudio }
-        case .audio: return talkMedia.filter(\.isAudio)
+        case .all: return scopedTalkMedia
+        case .video: return scopedTalkMedia.filter { !$0.isAudio }
+        case .audio: return scopedTalkMedia.filter(\.isAudio)
         }
     }
 
@@ -151,8 +179,32 @@ struct MediaListView: View {
         talkError = nil
         let result = await controller.talkMedia()
         talkMedia = result.media
+        talkScrolled = result.scrolled
         talkError = result.error ?? (result.media.isEmpty ? "動画・音声のメッセージがありません" : nil)
         loadingTalk = false
+    }
+
+    // MARK: - Saving
+
+    private func open(_ media: DetectedMedia) {
+        guard store.canSaveMedia else { onNeedPlan(); return }
+        pushedMedia = media
+    }
+
+    @ViewBuilder
+    private var navigationLinks: some View {
+        NavigationLink(isActive: Binding(get: { pushedMedia != nil }, set: { if !$0 { pushedMedia = nil } })) {
+            if let media = pushedMedia {
+                SaveSheetView(media: media, controller: controller, store: store,
+                              onNeedPlan: onNeedPlan, onClose: { pushedMedia = nil })
+            }
+        } label: { EmptyView() }
+        NavigationLink(isActive: Binding(get: { pushedBatch != nil }, set: { if !$0 { pushedBatch = nil } })) {
+            if let items = pushedBatch {
+                BatchSaveView(items: items, controller: controller, store: store,
+                              onNeedPlan: onNeedPlan, onClose: { pushedBatch = nil })
+            }
+        } label: { EmptyView() }
     }
 
     /// Everything on screen that can be saved, in list order: this page's,
@@ -175,7 +227,8 @@ struct MediaListView: View {
             Spacer()
             Button {
                 AppLog.log("まとめて保存: \(picked.count)件を選択")
-                onSaveSelected(picked)
+                guard store.canSaveMedia else { onNeedPlan(); return }
+                pushedBatch = picked
             } label: {
                 Text(picked.isEmpty ? "保存" : "\(picked.count)件を保存").bold()
             }
@@ -191,7 +244,7 @@ struct MediaListView: View {
             if selecting {
                 if selected.contains(media.id) { selected.remove(media.id) } else { selected.insert(media.id) }
             } else {
-                onSelect(media)
+                open(media)
             }
         } label: {
             HStack(spacing: 12) {

@@ -380,7 +380,8 @@
             post({
                 kind: "timeline", requestID: requestID, groupID: String(groupID), messages: messages,
                 pages: pages, status: status, keys: Object.keys(keys), error: error || "",
-                fromTimeline: fromTimeline, fromPast: fromPast
+                fromTimeline: fromTimeline, fromPast: fromPast,
+                groupName: groupName, groupKeys: groupKeys
             });
         }
         function text(v) { return v === undefined || v === null ? "" : String(v); }
@@ -442,8 +443,41 @@
                 finish();
             });
         }
+        // トークの名前(メンバー名。保存するファイル名に使う)。グループ1件の
+        // API → 一覧の API の順に試す。どちらも1回だけで、失敗してもたどる処理は止めない。
+        // 項目名だけを groupKeys で返す(どの項目に名前があるかをログで確かめるため)。
+        var groupName = "", groupKeys = [];
+        function nameOf(g) {
+            if (!g || typeof g !== "object") { return ""; }
+            groupKeys = Object.keys(g).slice(0, 40);
+            var fields = ["name", "member_name", "display_name", "title", "nickname"];
+            for (var i = 0; i < fields.length; i++) {
+                if (typeof g[fields[i]] === "string" && g[fields[i]]) { return g[fields[i]]; }
+            }
+            return "";
+        }
+        function fetchGroupName(done) {
+            originalFetch.call(window, base, { headers: headers, credentials: "include" })
+                .then(function (res) { return res.status === 200 ? res.json() : null; })
+                .then(function (json) {
+                    groupName = nameOf(json && (json.group || json));
+                    if (groupName) { done(); return; }
+                    return originalFetch.call(window, apiOrigin + "/v2/groups", { headers: headers, credentials: "include" })
+                        .then(function (res) { return res.status === 200 ? res.json() : null; })
+                        .then(function (list) {
+                            var arr = Array.isArray(list) ? list : (list && (list.groups || list.data)) || [];
+                            for (var i = 0; i < arr.length; i++) {
+                                if (arr[i] && String(arr[i].id) === String(groupID)) { groupName = nameOf(arr[i]); break; }
+                            }
+                            done();
+                        });
+                })
+                .then(null, function () { done(); });
+        }
         if (!originalFetch) { finish("fetch unavailable"); return; }
-        page("");
+        // 名前を先に取ってからたどる(短いトークだと、たどり終わりに間に合わないため)。
+        var started = false;
+        fetchGroupName(function () { if (!started) { started = true; page(""); } });
     };
 
     XMLHttpRequest.prototype.send = function () {

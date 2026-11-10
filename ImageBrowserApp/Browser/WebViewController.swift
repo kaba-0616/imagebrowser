@@ -480,6 +480,8 @@ final class WebViewController: NSObject, ObservableObject {
     /// Per talk group, so repeated long presses don't re-walk the whole
     /// timeline. Kept 10 minutes -- the signed URLs inside expire.
     private var timelineCache: [String: (at: Date, messages: [TimelineMessage])] = [:]
+    /// Talk group ID -> the talk's name, from the timeline walk.
+    var talkNames: [String: String] = [:]
 
     struct TimelineMessage {
         let id: String
@@ -733,7 +735,7 @@ final class WebViewController: NSObject, ObservableObject {
 
     /// Leading number of a `/messages/` filename (`370571-20260919-....jpg`
     /// -> `370571`), which is the message ID the API takes.
-    private static func messageID(of url: URL) -> String? {
+    static func messageID(of url: URL) -> String? {
         guard url.path.contains("/messages/"),
               let first = url.lastPathComponent.split(separator: "-").first,
               first.allSatisfy(\.isNumber) else { return nil }
@@ -1476,6 +1478,13 @@ extension WebViewController: WKScriptMessageHandler {
             if error.isEmpty, !messages.isEmpty {
                 timelineCache[groupID] = (Date(), messages)
             }
+            // The talk's name (the member's), for saved file names. Field
+            // names only in the log -- which one holds it is still to be
+            // confirmed on device.
+            let groupName = (body["groupName"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !groupName.isEmpty { talkNames[groupID] = groupName }
+            AppLog.log("トーク名: \(groupName.isEmpty ? "取れず" : "取得済み(\(groupName.count)文字)") 項目[\((body["groupKeys"] as? [String] ?? []).joined(separator: ","))]",
+                       isError: groupName.isEmpty)
             for waiter in waiters {
                 waiter.resume(returning: TimelineResult(messages: messages, complete: error.isEmpty))
             }

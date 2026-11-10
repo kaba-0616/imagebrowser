@@ -93,27 +93,72 @@ extension WebViewController {
     /// Whether the open screen is a talk whose videos and voices can be listed.
     var canListTalkMedia: Bool { canLoadHistory }
 
-    /// Every video and voice message of the open talk, newest first. Uses
-    /// the same cached timeline walk as "さかのぼり抽出".
-    func talkMedia() async -> (media: [DetectedMedia], error: String?) {
-        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return ([], nil) }
+    /// Every video and voice message of the open talk, newest first, and
+    /// which of them lie in the stretch the user has scrolled through.
+    /// Uses the same cached timeline walk as "さかのぼり抽出".
+    func talkMedia() async -> (media: [DetectedMedia], scrolled: Set<String>, error: String?) {
+        guard let origin = messageAPIOrigin, let groupID = currentTalkGroupID else { return ([], [], nil) }
         let started = Date()
         // As long as "さかのぼり抽出": a long talk takes a while to walk.
         let messages = await fetchTimeline(groupID: groupID, origin: origin, timeout: 190)
             .sorted { Self.deliveryOrder($1, $0) }
-        let talkName = pageTitle.isEmpty ? "トーク" : pageTitle
-        let media = messages.compactMap { message -> DetectedMedia? in
-            guard message.isVideo || message.isVoice, let file = message.file else { return nil }
-            return DetectedMedia(url: file, kind: .file, isAudio: message.isVoice,
-                                 title: FileNaming.sanitized(talkName, fallback: "talk"),
-                                 posterURL: message.isVideo ? message.thumbnail : nil,
-                                 source: .talk, publishedAt: message.publishedAt, pageURL: webView.url)
+        let talkName = talkNames[groupID] ?? (pageTitle.isEmpty ? "トーク" : pageTitle)
+        let mediaMessages = messages.filter { ($0.isVideo || $0.isVoice) && $0.file != nil }
+        let names = Self.talkFileNames(mediaMessages, talkName: talkName)
+        let media = mediaMessages.map { message in
+            DetectedMedia(url: message.file!, kind: .file, isAudio: message.isVoice,
+                          title: FileNaming.sanitized(talkName, fallback: "talk"),
+                          posterURL: message.isVideo ? message.thumbnail : nil,
+                          source: .talk, publishedAt: message.publishedAt,
+                          presetName: names[message.id], pageURL: webView.url)
         }
+        let scrolled = await scrolledTalkMedia(media, messages: messages)
         let videos = media.filter { !$0.isAudio }.count
         let error = messages.isEmpty ? "トークを読み込めませんでした" : nil
-        AppLog.log("トークの動画・音声: メッセージ\(messages.count)件中 動画\(videos)件 音声\(media.count - videos)件 \(Int(Date().timeIntervalSince(started) * 1000))ms",
+        AppLog.log("トークの動画・音声: メッセージ\(messages.count)件中 動画\(videos)件 音声\(media.count - videos)件 スクロールした範囲\(scrolled.count)件 \(Int(Date().timeIntervalSince(started) * 1000))ms",
                    isError: error != nil)
-        return (media, error)
+        return (media, scrolled, error)
+    }
+
+    /// "メンバー名_yyyymmdd_hhmm", plus "_1", "_2"... (oldest first) when
+    /// several arrived in the same minute (user spec, 2026-11-11).
+    static func talkFileNames(_ messages: [TimelineMessage], talkName: String) -> [String: String] {
+        let member = FileNaming.sanitized(talkName.components(separatedBy: .whitespaces).joined(), fallback: "talk")
+        let minute = DateFormatter()
+        minute.locale = Locale(identifier: "en_US_POSIX")
+        minute.dateFormat = "yyyyMMdd_HHmm"
+        var byMinute: [String: [TimelineMessage]] = [:]
+        for message in messages {
+            let stamp = DetectedMedia.date(message.publishedAt).map(minute.string(from:)) ?? "日時不明"
+            byMinute[stamp, default: []].append(message)
+        }
+        var names: [String: String] = [:]
+        for (stamp, group) in byMinute {
+            let ordered = group.sorted(by: deliveryOrder)
+            for (index, message) in ordered.enumerated() {
+                names[message.id] = "\(member)_\(stamp)" + (ordered.count > 1 ? "_\(index + 1)" : "")
+            }
+        }
+        return names
+    }
+
+    /// The talk opens at its newest message and the user scrolls up, so the
+    /// stretch they've seen runs from the oldest message whose image the
+    /// page loaded (photos and video thumbnails -- NetworkTap.js keeps every
+    /// image loaded since the page opened) to the newest one.
+    private func scrolledTalkMedia(_ media: [DetectedMedia], messages: [TimelineMessage]) async -> Set<String> {
+        let raw = (try? await webView.evaluateJavaScript(
+            "window.__ImageBrowserSeenImages ? window.__ImageBrowserSeenImages() : []")) as? [String] ?? []
+        let seenIDs = Set(raw.compactMap(URL.init(string:)).compactMap(Self.messageID(of:)))
+        let seen = messages.filter { seenIDs.contains($0.id) }
+        guard let oldest = seen.min(by: Self.deliveryOrder) else {
+            AppLog.log("トークの動画・音声: スクロールした範囲を特定できず(読み込んだ画像\(raw.count)件、該当メッセージなし)", isError: true)
+            return []
+        }
+        return Set(media.filter { item in
+            guard let at = item.publishedAt, !at.isEmpty, !oldest.publishedAt.isEmpty else { return false }
+            return at >= oldest.publishedAt
+        }.map(\.id))
     }
 }
 

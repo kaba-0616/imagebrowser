@@ -1,8 +1,10 @@
+import AVKit
 import SwiftUI
 
 /// Name, format, quality and destination for one video/audio, then the
-/// download's progress. Saving is Pro+ only (user decision, 2026-11-10);
-/// anyone else is sent to the Pro+ paywall on the save button.
+/// download's progress. Pushed from the media list, so "戻る" returns to it.
+/// Saving is Pro+ only (user decision, 2026-11-10); anyone else is sent to
+/// the Pro+ paywall on the save button.
 struct SaveSheetView: View {
     let media: DetectedMedia
     let controller: WebViewController
@@ -22,93 +24,87 @@ struct SaveSheetView: View {
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        NavigationView {
-            Form {
-                Section {
-                    HStack(spacing: 12) {
-                        PosterView(url: media.posterURL, isAudio: media.isAudio)
-                            .frame(width: 96, height: 60)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(media.typeLabel).font(.subheadline.weight(.semibold))
-                            if let duration = media.duration {
-                                Text(MediaListView.time(duration)).font(.caption).foregroundColor(.secondary)
-                            }
-                            Text(media.url.host ?? "").font(.caption).foregroundColor(.secondary).lineLimit(1)
+        Form {
+            Section {
+                MediaPreview(media: media, controller: controller)
+                    .listRowInsets(EdgeInsets())
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(media.typeLabel).font(.subheadline.weight(.semibold))
+                        if let duration = media.duration {
+                            Text(MediaListView.time(duration)).font(.caption).foregroundColor(.secondary)
                         }
-                    }
-                }
-
-                Section("ファイル名") {
-                    HStack {
-                        TextField("ファイル名", text: $name)
-                            .focused($nameFocused)
-                            .disableAutocorrection(true)
-                            .submitLabel(.done)
-                        Text("." + format.fileExtension)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Section {
-                    Picker("形式", selection: $format) {
-                        ForEach(availableFormats) { Text($0.label).tag($0) }
-                    }
-                    if media.kind == .hls && format == .mp4 {
-                        if loadingQualities {
-                            HStack { Text("画質"); Spacer(); ProgressView() }
-                        } else if qualities.count > 1 {
-                            Picker("画質", selection: $quality) {
-                                ForEach(qualities) { Text($0.label).tag(Optional($0.id)) }
-                            }
-                        }
-                    }
-                    Picker("保存先", selection: $destination) {
-                        ForEach(SaveDestination.allCases) { option in
-                            Text(option.label).tag(option)
-                        }
-                    }
-                    .disabled(format.isAudioOnly)
-                } footer: {
-                    if format.isAudioOnly {
-                        Text("音声は写真アプリに保存できないため、「ファイル」に保存します。")
-                    } else if destination == .files {
-                        Text("保存ボタンの後に、保存するフォルダ(iCloud Drive・このiPhone内など)を選びます。")
-                    }
-                }
-
-                Section {
-                    progressRow
-                    Button(action: save) {
-                        HStack {
-                            Spacer()
-                            Text(saver.isBusy ? "保存中…" : "保存する").font(.headline)
-                            Spacer()
-                        }
-                    }
-                    .disabled(saver.isBusy || FileNaming.sanitized(name, fallback: "").isEmpty)
-                    if saver.isBusy {
-                        Button("中止", role: .destructive) { saver.cancel() }
-                    }
-                } footer: {
-                    if !store.canSaveMedia {
-                        Text("動画・音声の保存はPro+のプランで使えます。")
+                        Text(media.url.host ?? "").font(.caption).foregroundColor(.secondary).lineLimit(1)
                     }
                 }
             }
-            .navigationTitle("保存")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("閉じる") {
-                        if saver.isBusy { saver.cancel() }
-                        saver.cleanUp()
-                        onClose()
+
+            Section("ファイル名") {
+                HStack {
+                    TextField("ファイル名", text: $name)
+                        .focused($nameFocused)
+                        .disableAutocorrection(true)
+                        .submitLabel(.done)
+                    Text("." + format.fileExtension)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Section {
+                Picker("形式", selection: $format) {
+                    ForEach(availableFormats) { Text($0.label).tag($0) }
+                }
+                if media.kind == .hls && format == .mp4 {
+                    if loadingQualities {
+                        HStack { Text("画質"); Spacer(); ProgressView() }
+                    } else if qualities.count > 1 {
+                        Picker("画質", selection: $quality) {
+                            ForEach(qualities) { Text($0.label).tag(Optional($0.id)) }
+                        }
                     }
+                }
+                Picker("保存先", selection: $destination) {
+                    ForEach(SaveDestination.allCases) { option in
+                        Text(option.label).tag(option)
+                    }
+                }
+                .disabled(format.isAudioOnly)
+            } footer: {
+                if format.isAudioOnly {
+                    Text("音声は写真アプリに保存できないため、「ファイル」に保存します。")
+                } else if destination == .files {
+                    Text("保存ボタンの後に、保存するフォルダ(iCloud Drive・このiPhone内など)を選びます。")
+                }
+            }
+
+            Section {
+                progressRow
+                Button(action: save) {
+                    HStack {
+                        Spacer()
+                        Text(saver.isBusy ? "保存中…" : "保存する").font(.headline)
+                        Spacer()
+                    }
+                }
+                .disabled(saver.isBusy || FileNaming.sanitized(name, fallback: "").isEmpty)
+                if saver.isBusy {
+                    Button("中止", role: .destructive) { saver.cancel() }
+                }
+            } footer: {
+                if !store.canSaveMedia {
+                    Text("動画・音声の保存はPro+のプランで使えます。")
                 }
             }
         }
-        .navigationViewStyle(.stack)
+        .navigationTitle("保存")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(saver.isBusy)
         .interactiveDismissDisabled(saver.isBusy)
+        .onDisappear {
+            // Back to the list. The Files export sheet doesn't count:
+            // a sheet over this screen doesn't make it disappear.
+            if !saver.isBusy && exportFile == nil { saver.cleanUp() }
+        }
         .onAppear(perform: setUp)
         .onChange(of: format) { newValue in
             if newValue.isAudioOnly { destination = .files }
@@ -247,5 +243,49 @@ struct FilesExporter: UIViewControllerRepresentable {
         func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
             onFinish(false)
         }
+    }
+}
+
+/// The video (or audio) itself, played in place before saving (user
+/// request, 2026-11-11). Loads only when play is tapped, with this tab's
+/// cookies/Referer like the download, so a signed or session-bound URL
+/// plays the same way it downloads.
+struct MediaPreview: View {
+    let media: DetectedMedia
+    let controller: WebViewController
+
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        ZStack {
+            if let player {
+                VideoPlayer(player: player)
+            } else {
+                PosterView(url: media.posterURL, isAudio: media.isAudio)
+                Button {
+                    Task { await play() }
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 52))
+                        .foregroundStyle(.white, Color.black.opacity(0.45))
+                }
+                .accessibilityLabel("プレビューを再生")
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: media.isAudio ? 120 : 260)
+        .background(Color.black.opacity(player == nil ? 0 : 1))
+        .onDisappear { player?.pause() }
+    }
+
+    private func play() async {
+        let context = await controller.requestContext(for: media.url)
+        let asset = AVURLAsset(url: media.url, options: ["AVURLAssetHTTPHeaderFieldsKey": context.headers])
+        // Sound even with the silent switch on, like any video app.
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        self.player = player
+        player.play()
+        AppLog.log("プレビュー再生: \(media.typeLabel) \(WebViewController.shortURL(media.url))")
     }
 }

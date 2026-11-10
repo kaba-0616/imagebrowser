@@ -3,7 +3,8 @@ import SwiftUI
 /// Saves the videos and audio picked in the list, one after another, with
 /// one set of options: videos as MP4 to Photos or Files, audio as MP3/M4A to
 /// Files (Photos doesn't take audio). Names are each item's suggested name;
-/// HLS takes the best quality. Pro+ only, like a single save.
+/// HLS takes the best quality. Pro+ only, like a single save. Pushed from
+/// the media list, so "戻る" returns to it.
 struct BatchSaveView: View {
     let items: [DetectedMedia]
     let controller: WebViewController
@@ -22,67 +23,59 @@ struct BatchSaveView: View {
     private var audioCount: Int { items.count - videoCount }
 
     var body: some View {
-        NavigationView {
-            Form {
-                Section {
-                    HStack {
-                        Text("選んだ件数")
-                        Spacer()
-                        Text(summary).foregroundColor(.secondary)
-                    }
-                }
-
-                Section {
-                    if videoCount > 0 {
-                        Picker("動画の保存先", selection: $destination) {
-                            ForEach(SaveDestination.allCases) { Text($0.label).tag($0) }
-                        }
-                    }
-                    if audioCount > 0 {
-                        Picker("音声の形式", selection: $audioFormat) {
-                            ForEach(AudioOutputFormat.allCases) { Text($0.label).tag($0) }
-                        }
-                    }
-                } footer: {
-                    Text(optionsFooter)
-                }
-                .disabled(saver.isBusy)
-
-                Section {
-                    progressRows
-                    Button(action: save) {
-                        HStack {
-                            Spacer()
-                            Text(saver.isBusy ? "保存中…" : "\(items.count)件を保存する").font(.headline)
-                            Spacer()
-                        }
-                    }
-                    .disabled(saver.isBusy || saver.batch?.done == true)
-                    if saver.isBusy {
-                        Button("中止", role: .destructive) { saver.cancel() }
-                    }
-                } footer: {
-                    if !store.canSaveMedia {
-                        Text("動画・音声の保存はPro+のプランで使えます。")
-                    } else if !saver.isBusy && saver.batch == nil {
-                        Text("1件ずつ順番に保存します。終わるまでアプリを開いたままにしてください。")
-                    }
+        Form {
+            Section {
+                HStack {
+                    Text("選んだ件数")
+                    Spacer()
+                    Text(summary).foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("まとめて保存")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("閉じる") {
-                        if saver.isBusy { saver.cancel() }
-                        saver.cleanUp()
-                        onClose()
+
+            Section {
+                if videoCount > 0 {
+                    Picker("動画の保存先", selection: $destination) {
+                        ForEach(SaveDestination.allCases) { Text($0.label).tag($0) }
                     }
+                }
+                if audioCount > 0 {
+                    Picker("音声の形式", selection: $audioFormat) {
+                        ForEach(AudioOutputFormat.allCases) { Text($0.label).tag($0) }
+                    }
+                }
+            } footer: {
+                Text(optionsFooter)
+            }
+            .disabled(saver.isBusy)
+
+            Section {
+                progressRows
+                Button(action: save) {
+                    HStack {
+                        Spacer()
+                        Text(saver.isBusy ? "保存中…" : "\(items.count)件を保存する").font(.headline)
+                        Spacer()
+                    }
+                }
+                .disabled(saver.isBusy || saver.batch?.done == true)
+                if saver.isBusy {
+                    Button("中止", role: .destructive) { saver.cancel() }
+                }
+            } footer: {
+                if !store.canSaveMedia {
+                    Text("動画・音声の保存はPro+のプランで使えます。")
+                } else if !saver.isBusy && saver.batch == nil {
+                    Text("1件ずつ順番に保存します。終わるまでアプリを開いたままにしてください。")
                 }
             }
         }
-        .navigationViewStyle(.stack)
+        .navigationTitle("まとめて保存")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(saver.isBusy)
         .interactiveDismissDisabled(saver.isBusy)
+        .onDisappear {
+            if !saver.isBusy && !showExporter { saver.cleanUp() }
+        }
         // The idle timer would lock the screen partway through a long batch,
         // and a locked phone stops the downloads.
         .onChange(of: saver.isBusy) { busy in
