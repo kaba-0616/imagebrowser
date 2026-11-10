@@ -14,3 +14,13 @@ tools/simcheck/result.xcresult/
 
 # Firebase の設定(公開リポジトリに置かない。imagebrowser-signing/firebase が原本)
 ImageBrowserApp/GoogleService-Info.plist
+
+# 動画まわりの検証用プログラムの生成物(tools/hlscheck、VideoBrowser から移した)
+tools/hlscheck/hlscheck
+tools/hlscheck/mp3check
+tools/hlscheck/out/
+
+# シミュレータでの保存の流れの検証(tools/simcheck)
+tools/simcheck/Drive.xcodeproj/
+tools/simcheck/att/
+tools/simcheck/result.xcresult/

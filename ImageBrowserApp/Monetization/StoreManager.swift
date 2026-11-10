@@ -1,24 +1,35 @@
 import StoreKit
 
-/// Every product unlocks the exact same "Pro" entitlement (bulk extraction
-/// + no ads) -- deliberately not split into separate feature sets, so the
-/// purchase flow only ever has to ask "is the user Pro or not", never
-/// "which plan are they on".
+/// Every product unlocks "Pro" (bulk extraction + no ads). The Pro+ plans
+/// (2026-11-10, when VideoBrowser was folded in) add saving videos and
+/// audio on top; they sit above Pro in the same subscription group, so
+/// moving between them is an App Store upgrade/downgrade, never a second
+/// subscription.
 enum ProProduct: String, CaseIterable {
     /// 2026-11-01 に販売終了(サブスクのみにした)。既に買った人の Pro を
     /// 消さないよう、権利の判定には残している。
     case lifetime = "jp.kaba.imagebrowser.pro.lifetime"
     case monthly = "jp.kaba.imagebrowser.pro.monthly"
     case yearly = "jp.kaba.imagebrowser.pro.yearly"
+    case plusMonthly = "jp.kaba.imagebrowser.plus.monthly"
+    case plusYearly = "jp.kaba.imagebrowser.plus.yearly"
 
     /// What the paywall offers, in display order.
-    static let forSale: [ProProduct] = [.monthly, .yearly]
+    static let forSale: [ProProduct] = [.monthly, .yearly, .plusMonthly, .plusYearly]
+
+    /// Saving videos and audio comes with these only.
+    var includesMedia: Bool { self == .plusMonthly || self == .plusYearly }
 }
 
 @MainActor
 final class StoreManager: ObservableObject {
 
     @Published private(set) var isPro = false
+    /// Pro+: may save videos and audio. Like `isPro`, follows `ignoreProForTesting`.
+    @Published private(set) var canSaveMedia = false
+    /// Owns the discontinued lifetime purchase. It never included video, so
+    /// these users are still offered Pro+ (and only Pro+).
+    @Published private(set) var ownsLifetime = false
     /// The real purchase state, unaffected by `ignoreProForTesting` -- the
     /// settings screen's "現在のプラン" shows this, so turning the test
     /// switch on doesn't make a purchase look gone (user request).
@@ -107,20 +118,23 @@ final class StoreManager: ObservableObject {
     }
 
     private func refreshEntitlements() async {
-        var activeID: String?
+        var owned: [ProProduct] = []
         for await result in Transaction.currentEntitlements {
             guard case .verified(let transaction) = result,
                   let found = ProProduct(rawValue: transaction.productID) else { continue }
-            // 買い切りとサブスクの両方を持つ人は、買い切りを優先して見せる
-            // (サブスクを解約しても Pro のままなので)。
-            if found == .lifetime || activeID == nil {
-                activeID = transaction.productID
-            }
+            owned.append(found)
         }
-        activeProductID = activeID
-        UsageStats.setPlan(activeID)
-        hasPurchasedPro = activeID != nil || Self.isSimulator
+        // 「現在のプラン」に出すもの: Pro+ があればそれ(いちばん多く使える)、
+        // 次に買い切り(サブスクを解約しても Pro のままなので)、最後に Pro。
+        let active = owned.first(where: \.includesMedia)
+            ?? owned.first(where: { $0 == .lifetime })
+            ?? owned.first
+        activeProductID = active?.rawValue
+        ownsLifetime = owned.contains(.lifetime)
+        UsageStats.setPlan(active?.rawValue)
+        hasPurchasedPro = active != nil || Self.isSimulator
         isPro = hasPurchasedPro && !proSuppressed
+        canSaveMedia = (owned.contains(where: \.includesMedia) || Self.isSimulator) && !proSuppressed
         hasCheckedEntitlements = true
     }
 

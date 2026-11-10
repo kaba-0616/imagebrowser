@@ -15,7 +15,7 @@ struct PlanListView: View {
     static let termsURL = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
     static let privacyURL = URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!
 
-    private var ownsLifetime: Bool { store.activeProductID == ProProduct.lifetime.rawValue }
+    private var ownsLifetime: Bool { store.ownsLifetime }
 
     var body: some View {
         List {
@@ -35,6 +35,8 @@ struct PlanListView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
+            } header: {
+                Text("Pro: 広告オフ・画像の一括抽出 / Pro+: Pro の内容に加えて動画・音声の保存")
             } footer: {
                 Text("サブスクリプションは自動更新されます。いつでも「設定」アプリの自分のApple IDからキャンセルできます。プランの切り替えは、次回の更新日から反映される場合があります。")
             }
@@ -69,7 +71,9 @@ struct PlanListView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Pro(買い切り)")
                 .font(.headline)
-            currentPlanLabel
+            if store.activeProductID == ProProduct.lifetime.rawValue {
+                currentPlanLabel
+            }
         }
         .padding(.vertical, 4)
     }
@@ -95,8 +99,8 @@ struct PlanListView: View {
                 .foregroundColor(.secondary)
             if store.activeProductID == product.id {
                 currentPlanLabel
-            } else if !ownsLifetime {
-                // 買い切りの人は Pro のままなので、サブスクを勧めない。
+            } else if !ownsLifetime || ProProduct(rawValue: product.id)?.includesMedia == true {
+                // 買い切りの人は Pro のままなので、動画の付く Pro+ だけを勧める。
                 Button(store.hasPurchasedPro ? "このプランに切り替える" : "登録する") {
                     Task { await purchase(product) }
                 }

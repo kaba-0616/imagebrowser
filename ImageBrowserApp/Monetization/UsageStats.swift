@@ -60,7 +60,13 @@ enum UsageStats {
         log("save_images", ["host": host(of: page), "kind": kind, "succeeded": succeeded, "failed": failed])
     }
 
-    /// `from`: "extract"(一括抽出ボタン)/ "history"(さかのぼり)
+    /// 動画・音声を1本保存できたとき。`format` は mp4 / mp3 / m4a。
+    static func savedMedia(page: URL?, format: String, hls: Bool, talk: Bool) {
+        log("save_media", ["host": host(of: page), "format": format,
+                           "source": talk ? "talk" : hls ? "hls" : "file"])
+    }
+
+    /// `from`: "extract"(一括抽出ボタン)/ "history"(さかのぼり)/ "media"(動画・音声の保存)
     static func paywallShown(page: URL?, from: String) {
         let host = host(of: page)
         lastPaywallHost = host

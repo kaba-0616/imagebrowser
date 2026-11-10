@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var adBlockEnabled = AdBlockStore.isEnabled
     @State private var verboseDiagnostics = DiagnosticsStore.isVerbose
     @State private var usageStatsEnabled = UsageStats.isEnabled
+    @AppStorage(SaveDestination.key) private var saveDestinationRaw = SaveDestination.photos.rawValue
+    @AppStorage(AudioOutputFormat.key) private var audioFormatRaw = AudioOutputFormat.mp3.rawValue
 
     var body: some View {
         NavigationView {
@@ -33,11 +35,24 @@ struct SettingsView: View {
                     ))
                 }
 
+                Section {
+                    Picker("保存先", selection: $saveDestinationRaw) {
+                        ForEach(SaveDestination.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                    Picker("音声の形式", selection: $audioFormatRaw) {
+                        ForEach(AudioOutputFormat.allCases) { Text($0.label).tag($0.rawValue) }
+                    }
+                } header: {
+                    Text("動画・音声の保存")
+                } footer: {
+                    Text("保存するたびに変えられます。ここでは最初に選ばれている値を決めます。")
+                }
+
                 Section("Pro") {
                     HStack {
                         Text("現在のプラン")
                         Spacer()
-                        Text(store.hasPurchasedPro ? "Pro" : "無料")
+                        Text(planName)
                             .foregroundColor(.secondary)
                     }
                     NavigationLink("プランを見る") {
@@ -87,12 +102,13 @@ struct SettingsView: View {
                 } header: {
                     Text("改善へのご協力")
                 } footer: {
-                    Text("画像の抽出・保存を行ったサイトのドメイン(例: sakurazaka46.com)と件数、購入の有無を送信し、対応サイトの改善に使います。ページのURL・画像・入力内容は送信しません。")
+                    Text("画像・動画の抽出・保存を行ったサイトのドメイン(例: sakurazaka46.com)と件数、購入の有無を送信し、対応サイトの改善に使います。ページのURL・画像・入力内容は送信しません。")
                 }
 
                 Section("サポート") {
                     Link("プライバシーポリシー", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!)
                     Link("サポート", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e815cb39acc3d6bc37793")!)
+                    NavigationLink("ライセンス") { LicensesView() }
                     NavigationLink("お問い合わせ") { ContactView() }
                 }
 
@@ -135,5 +151,10 @@ struct SettingsView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var planName: String {
+        guard store.hasPurchasedPro else { return "無料" }
+        return ProProduct(rawValue: store.activeProductID ?? "")?.includesMedia == true ? "Pro+" : "Pro"
     }
 }

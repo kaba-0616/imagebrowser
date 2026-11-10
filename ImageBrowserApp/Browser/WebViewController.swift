@@ -32,6 +32,9 @@ final class WebViewController: NSObject, ObservableObject {
     /// Called with each thumbnail actually taken, so TabManager can keep it
     /// on disk across relaunches.
     var onThumbnailCaptured: ((UIImage) -> Void)?
+    /// Videos and audio found on the current page, newest first (from
+    /// MediaSniffer.js; see WebViewController+Media.swift).
+    @Published var detectedMedia: [DetectedMedia] = []
     /// Set when the long-press gesture resolves to an image URL on the page.
     /// BrowserView watches this to present the save menu.
     @Published var longPressedImageURL: URL?
@@ -90,6 +93,9 @@ final class WebViewController: NSObject, ObservableObject {
         // need to track the actual Safari version since "Safari/605.1.15"
         // has stayed the same build marker across many iOS releases.
         configuration.applicationNameForUserAgent = "Version/17.4 Safari/605.1.15"
+        // Inline playback like Safari: full-screen-only playback hides the
+        // page (and with it the save button) the moment a video starts.
+        configuration.allowsInlineMediaPlayback = true
 
         let userContentController = WKUserContentController()
         if let script = WebViewController.loadCollectorScript() {
@@ -119,6 +125,13 @@ final class WebViewController: NSObject, ObservableObject {
                 WKUserScript(source: tap, injectionTime: .atDocumentStart, forMainFrameOnly: false)
             )
         }
+        // Video/audio detection (see MediaSniffer.js): also before any page
+        // script, so it wraps fetch/XHR before players use them.
+        if let sniffer = WebViewController.loadBundledScript(named: "MediaSniffer") {
+            userContentController.addUserScript(
+                WKUserScript(source: sniffer, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+            )
+        }
         // Has to run before the page's first play() (see MessageSoundSession.js).
         if let sound = WebViewController.loadBundledScript(named: "MessageSoundSession") {
             userContentController.addUserScript(
@@ -136,6 +149,7 @@ final class WebViewController: NSObject, ObservableObject {
         // would otherwise keep this controller (and its WKWebView) alive
         // forever after the tab is closed.
         userContentController.add(WeakScriptMessageHandler(target: self), name: "imageBrowserNet")
+        userContentController.add(WeakScriptMessageHandler(target: self), name: "videoBrowserMedia")
         commonSetup()
     }
 
@@ -450,7 +464,7 @@ final class WebViewController: NSObject, ObservableObject {
     /// Origin of the site's message API (e.g. `https://api.message.sakurazaka46.com`),
     /// learned from NetworkTap reports -- see `isMessageAPI` for which
     /// responses count.
-    private var messageAPIOrigin: String?
+    private(set) var messageAPIOrigin: String?
     private var pendingRefresh: [String: CheckedContinuation<[String: RefreshedMessage], Never>] = [:]
     /// One timeline walk per talk group at a time, keyed by group id. A
     /// second request for a group already being walked waits for that walk
@@ -501,7 +515,7 @@ final class WebViewController: NSObject, ObservableObject {
     /// site's own timeline API (see NetworkTap.js).
     /// `timeout` only bounds this caller's wait: long press gives up early,
     /// "さかのぼり抽出" waits out the script's own retry deadline.
-    private func fetchTimeline(groupID: String, origin: String, timeout: Int = 20) async -> [TimelineMessage] {
+    func fetchTimeline(groupID: String, origin: String, timeout: Int = 20) async -> [TimelineMessage] {
         if let cached = timelineCache[groupID], Date().timeIntervalSince(cached.at) < 600 {
             lastTimelineComplete[groupID] = true
             return cached.messages
@@ -648,7 +662,7 @@ final class WebViewController: NSObject, ObservableObject {
     }
 
     /// `/organization/1/talk/timeline/58` -> `58`.
-    private var currentTalkGroupID: String? {
+    var currentTalkGroupID: String? {
         guard let path = webView.url?.path,
               let range = path.range(of: #"/timeline/(\d+)"#, options: .regularExpression) else { return nil }
         return path[range].split(separator: "/").last.map(String.init)
@@ -1285,7 +1299,7 @@ final class WebViewController: NSObject, ObservableObject {
         loadBundledScript(named: "ImageCollector")
     }
 
-    private static func loadBundledScript(named name: String) -> String? {
+    static func loadBundledScript(named name: String) -> String? {
         guard let url = Bundle.main.url(forResource: name, withExtension: "js") else {
             assertionFailure("\(name).js is missing from the app bundle")
             return nil
@@ -1308,6 +1322,21 @@ final class WebViewController: NSObject, ObservableObject {
 extension WebViewController: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         AppLog.log("読み込み開始: \(webView.url?.absoluteString ?? "?")")
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        // A new document: what the previous page played is gone with it.
+        // (Single-page sites that only change the URL keep their list.)
+        detectedMedia.removeAll()
+    }
+
+    /// A link straight to a video/audio file: WebKit plays it in its own
+    /// player page, and the response's MIME type is the only place this
+    /// shows up (no page script runs there).
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        noteNavigationResponse(navigationResponse.response)
+        decisionHandler(.allow)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1384,7 +1413,7 @@ extension WebViewController: WKScriptMessageHandler {
     /// for now -- logged so we can see whether a site's API already hands
     /// out full-size image URLs that the page itself never fetches.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "imageBrowserNet" else { return }
+        guard message.name == "imageBrowserNet" || message.name == "videoBrowserMedia" else { return }
         // Forward to the tab the message actually came from (see `owners`).
         if let source = message.webView, source !== webView,
            let owner = Self.owners.object(forKey: source) {
@@ -1392,6 +1421,10 @@ extension WebViewController: WKScriptMessageHandler {
             return
         }
         guard let body = message.body as? [String: Any] else { return }
+        if message.name == "videoBrowserMedia" {
+            handleMediaReport(body)
+            return
+        }
         let kind = body["kind"] as? String ?? "api"
         if kind == "sound" {
             let name = body["name"] as? String ?? "?"

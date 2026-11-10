@@ -1,10 +1,12 @@
 import SwiftUI
 import StoreKit
 
-/// Shown when a free user taps the bulk-extract button. Offers the monthly
-/// and yearly subscriptions; either one flips the same `isPro` flag.
+/// Shown when a free user taps the bulk-extract button (every plan), or
+/// when someone without Pro+ tries to save a video or audio (`forMedia`:
+/// Pro+ only, no ad option).
 struct PaywallView: View {
     @ObservedObject var store: StoreManager
+    var forMedia = false
     let onClose: () -> Void
     /// "Watch an ad for one extraction". nil hides the option (opened from
     /// Settings, or the ad SDK isn't started yet).
@@ -23,9 +25,11 @@ struct PaywallView: View {
                         Image(systemName: "photo.stack")
                             .font(.system(size: 44))
                             .foregroundColor(.accentColor)
-                        Text("Proで一括抽出を使う")
+                        Text(forMedia ? "Pro+で動画・音声を保存" : "Proで一括抽出を使う")
                             .font(.title2.bold())
-                        Text("ページ内の画像をまとめて抽出・選択保存できるようになり、広告も非表示になります。")
+                        Text(forMedia
+                             ? "ページの動画・音声(トークの動画・ボイスを含む)をMP4・MP3などで保存できます。画像の一括抽出と広告の非表示も含まれます。"
+                             : "ページ内の画像をまとめて抽出・選択保存できるようになり、広告も非表示になります。Pro+なら動画・音声も保存できます。")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -125,13 +129,18 @@ struct PaywallView: View {
             if onWatchAd != nil { await rewardedAd.preload() }
         }
         .onChange(of: store.isPro) { isPro in
-            if isPro { onClose() }
+            if isPro && !forMedia { onClose() }
+        }
+        .onChange(of: store.canSaveMedia) { canSave in
+            if canSave { onClose() }
         }
     }
 
     /// In `ProProduct.forSale` order: monthly, then yearly.
     private var sortedProducts: [Product] {
-        store.products.sorted { order(of: $0) < order(of: $1) }
+        store.products
+            .filter { !forMedia || ProProduct(rawValue: $0.id)?.includesMedia == true }
+            .sorted { order(of: $0) < order(of: $1) }
     }
 
     private func order(of product: Product) -> Int {

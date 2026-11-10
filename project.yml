@@ -50,7 +50,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
-        NSPhotoLibraryAddUsageDescription: "抽出した画像をカメラロールに保存するために使用します。"
+        NSPhotoLibraryAddUsageDescription: "抽出した画像や保存した動画をカメラロールに追加するために使用します。"
         # imagebrowser用にAdMobコンソールで発行した実App ID。
         GADApplicationIdentifier: "ca-app-pub-1034383442757151~4077627135"
         # 利用状況の計測(UsageStats)は広告に使わない: 広告IDを集めず、広告の
@@ -143,6 +143,32 @@ targets:
       - package: GoogleMobileAds
       - package: Firebase
         product: FirebaseAnalytics
+      - target: LameMP3
+
+  # MP3 エンコーダ LAME 3.100(LGPL v2 以降)。VideoBrowser から移した(2026-11-10)。
+  # LGPL のため、アプリ本体に静的に混ぜず別のフレームワークにしている。ソースは
+  # 公式配布物そのまま + 手書きの config.h(docs/video.md)。
+  LameMP3:
+    type: framework
+    platform: iOS
+    sources:
+      - path: ThirdParty/lame/libmp3lame
+        headerVisibility: project
+      - path: ThirdParty/lame/include/lame.h
+        headerVisibility: public
+      - path: ThirdParty/lame/LameMP3.h
+        headerVisibility: public
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: jp.kaba.imagebrowser.lame
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "3.100"
+        CURRENT_PROJECT_VERSION: "1"
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+        GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "HAVE_CONFIG_H=1"]
+        HEADER_SEARCH_PATHS: ["$(SRCROOT)/ThirdParty/lame/libmp3lame", "$(SRCROOT)/ThirdParty/lame/include"]
+        GCC_WARN_INHIBIT_ALL_WARNINGS: YES
 
 schemes:
   ImageBrowserApp:

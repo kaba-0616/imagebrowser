@@ -78,6 +78,9 @@ private struct BrowserTabContentView: View {
     @State private var extractedImages: [PageImage] = []
     @State private var showGrid = false
     @State private var showPaywall = false
+    @State private var showMediaList = false
+    @State private var savingMedia: DetectedMedia?
+    @State private var showMediaPaywall = false
     @ObservedObject private var adConsent = AdConsent.shared
     @State private var extractionError: String?
     @State private var bookmarkDraft: BookmarkDraft?
@@ -170,6 +173,33 @@ private struct BrowserTabContentView: View {
                 onWatchAd: adConsent.isReady ? { await watchAdForOneExtraction() } : nil
             )
         }
+        .sheet(isPresented: $showMediaList) {
+            MediaListView(controller: controller, onSelect: { media in
+                showMediaList = false
+                // The next sheet can't open until the list's dismiss
+                // animation has finished.
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    if store.canSaveMedia {
+                        savingMedia = media
+                    } else {
+                        openMediaPaywall()
+                    }
+                }
+            }, onClose: { showMediaList = false })
+        }
+        .sheet(item: $savingMedia) { media in
+            SaveSheetView(media: media, controller: controller, store: store, onNeedPlan: {
+                savingMedia = nil
+                Task {
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    openMediaPaywall()
+                }
+            }, onClose: { savingMedia = nil })
+        }
+        .sheet(isPresented: $showMediaPaywall) {
+            PaywallView(store: store, forMedia: true, onClose: { showMediaPaywall = false })
+        }
         .sheet(item: $bookmarkDraft) { draft in
             BookmarkNameSheet(
                 heading: "ブックマークを追加",
@@ -236,6 +266,8 @@ private struct BrowserTabContentView: View {
             bookmarkButton
                 .frame(maxWidth: .infinity)
             extractButton
+                .frame(maxWidth: .infinity)
+            mediaButton
                 .frame(maxWidth: .infinity)
             tabsButton
                 .frame(maxWidth: .infinity)
@@ -321,6 +353,36 @@ private struct BrowserTabContentView: View {
             }
         }
         .disabled(isExtracting)
+    }
+
+    /// Videos and audio on this page, with a count badge (from VideoBrowser).
+    /// Anyone can open the list; saving from it is Pro+ only.
+    private var mediaButton: some View {
+        Button {
+            AppLog.log("動画・音声ボタン: 検出\(controller.detectedMedia.count)件 \(controller.urlString)")
+            showMediaList = true
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "film")
+                    .frame(width: 44, height: 32)
+                let count = controller.isRestrictedSite ? 0 : controller.detectedMedia.count
+                if count > 0 {
+                    Text(count > 99 ? "99+" : "\(count)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Capsule().fill(Color.red))
+                        .offset(x: -2, y: 0)
+                }
+            }
+        }
+        .accessibilityLabel("動画・音声を保存")
+    }
+
+    private func openMediaPaywall() {
+        UsageStats.paywallShown(page: URL(string: controller.urlString), from: "media")
+        showMediaPaywall = true
     }
 
     private func handleExtractTap() {
