@@ -38,11 +38,16 @@ struct MediaListView: View {
                     } footer: {
                         Text("著作権保護(DRM)がかかった配信サービスの映像・音楽は保存できません。")
                     }
+                } else if controller.canListTalkMedia {
+                    // A talk draws on a canvas and plays nothing until tapped,
+                    // so scrolling it finds no videos; the talk's own data has
+                    // them all. Listed first and loaded right away -- the
+                    // button under an empty "このページ" went unnoticed
+                    // (2026-11-11, user: "スクロールしても増えない").
+                    talkSection
+                    if !controller.detectedMedia.isEmpty { pageSection }
                 } else {
                     pageSection
-                    if controller.canListTalkMedia {
-                        talkSection
-                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -66,7 +71,10 @@ struct MediaListView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .task { await controller.rescanPage() }
+        .task {
+            await controller.rescanPage()
+            if controller.canListTalkMedia && talkMedia.isEmpty && !loadingTalk { await loadTalk() }
+        }
     }
 
     @ViewBuilder
