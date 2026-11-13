@@ -115,6 +115,28 @@ final class SaveFlowUITests: XCTestCase {
 
     // MARK: -
 
+    /// 再起動しても「戻る」の履歴が残る(2026-11-13)。2ページ進めて終了 → 起動し直して戻る。
+    func test5_HistoryAfterRelaunch() throws {
+        var app = launch()
+        open(app, "https://example.com/")
+        sleep(3)
+        open(app, demoURL)
+        sleep(5)
+        app.terminate()
+        sleep(2)
+        app = launch()
+        sleep(4)
+        tree(app, "5-再起動後")
+        let back = app.buttons.matching(NSPredicate(format: "label IN {'Back', '戻る', 'chevron.left', '左'} OR identifier == 'chevron.left'")).firstMatch
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        XCTAssertTrue(back.isEnabled, "再起動後に戻るが押せない")
+        back.tap()
+        sleep(4)
+        shot("5-戻った後")
+        let field = app.textFields.firstMatch
+        XCTAssertTrue((field.value as? String ?? "").contains("example.com"), "\(field.value ?? "")")
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "jp.kaba.imagebrowser")
         app.launch()

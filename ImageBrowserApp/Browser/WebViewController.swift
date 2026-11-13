@@ -213,6 +213,19 @@ final class WebViewController: NSObject, ObservableObject {
         webView.load(URLRequest(url: target))
     }
 
+    /// The tab's back/forward list and current page, from `webView.interactionState`
+    /// -- saved by TabManager so a relaunch keeps "戻る" working (user
+    /// report, 2026-11-13: only the URL came back, with no history).
+    var savedInteractionState: Data? {
+        webView.interactionState as? Data
+    }
+
+    /// Reopens a tab from `savedInteractionState`: the current page loads
+    /// and the history behind it comes back.
+    func restore(interactionState: Data) {
+        webView.interactionState = interactionState
+    }
+
     func goBack() { webView.goBack() }
     func goForward() { webView.goForward() }
     func reloadOrStop() {
@@ -844,7 +857,13 @@ final class WebViewController: NSObject, ObservableObject {
                     if newURL != self.urlString { self.resetNetworkImageHistory(to: newURL) }
                     self.urlString = newURL
                     if !newURL.isEmpty {
-                        if URL(string: newURL)?.host != URL(string: self.lastLoadedURL)?.host {
+                        // Not on a relaunched tab's first URL (lastLoadedURL
+                        // still ""): that cleared the title restored from the
+                        // last run, and a talk app sets its title only once
+                        // shown, so the tab list said "新しいタブ" until the
+                        // tab was opened (2026-11-13).
+                        if !self.lastLoadedURL.isEmpty,
+                           URL(string: newURL)?.host != URL(string: self.lastLoadedURL)?.host {
                             self.pageTitle = webView.title ?? ""
                         }
                         self.lastLoadedURL = newURL

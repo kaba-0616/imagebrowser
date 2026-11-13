@@ -62,6 +62,20 @@ final class TabManager: ObservableObject {
         thumbnailDirectory.appendingPathComponent("\(persistentID).jpg")
     }
 
+    /// One `interactionState` per tab (back/forward list + current page),
+    /// named like the thumbnails. Application Support, not Caches: losing
+    /// it costs the user their "戻る" history, not just a picture.
+    private static let historyDirectory: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("TabHistory", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private static func historyURL(for persistentID: String) -> URL {
+        historyDirectory.appendingPathComponent("\(persistentID).state")
+    }
+
     var activeTab: BrowserTab? {
         tabs.first { $0.id == activeTabID }
     }
@@ -106,6 +120,7 @@ final class TabManager: ObservableObject {
         urlObservers[id] = nil
         titleObservers[id] = nil
         try? FileManager.default.removeItem(at: Self.thumbnailURL(for: closed.persistentID))
+        try? FileManager.default.removeItem(at: Self.historyURL(for: closed.persistentID))
         if tabs.isEmpty {
             if keepAtLeastOne {
                 newTab()
@@ -139,10 +154,15 @@ final class TabManager: ObservableObject {
         saveState()
     }
 
-    private func makeTab(loading urlString: String, persistentID: String = UUID().uuidString) -> BrowserTab {
+    private func makeTab(loading urlString: String, persistentID: String = UUID().uuidString,
+                         history: Data? = nil) -> BrowserTab {
         let tab = BrowserTab(persistentID: persistentID)
         tab.lastKnownURL = urlString
-        tab.controller.load(urlString: urlString)
+        if let history {
+            tab.controller.restore(interactionState: history)
+        } else {
+            tab.controller.load(urlString: urlString)
+        }
         wireTab(tab)
         return tab
     }
@@ -194,14 +214,18 @@ final class TabManager: ObservableObject {
 
         let savedIDs = UserDefaults.standard.stringArray(forKey: Self.savedIDsKey) ?? []
         let savedTitles = UserDefaults.standard.stringArray(forKey: Self.savedTitlesKey) ?? []
+        var withHistory = 0
         let restored = savedURLs.enumerated().map { index, url -> BrowserTab in
             let persistentID = savedIDs.indices.contains(index) ? savedIDs[index] : UUID().uuidString
-            let tab = makeTab(loading: url, persistentID: persistentID)
+            let history = try? Data(contentsOf: Self.historyURL(for: persistentID))
+            if history != nil { withHistory += 1 }
+            let tab = makeTab(loading: url, persistentID: persistentID, history: history)
             let title = savedTitles.indices.contains(index) ? savedTitles[index] : ""
             let thumbnail = UIImage(contentsOfFile: Self.thumbnailURL(for: persistentID).path)
             tab.controller.restoreDisplay(title: title, thumbnail: thumbnail)
             return tab
         }
+        AppLog.log("タブ復元: 戻る履歴あり\(withHistory)/\(savedURLs.count)件")
         tabs = restored
         pruneThumbnails(keeping: Set(restored.map(\.persistentID)))
         let savedIndex = UserDefaults.standard.integer(forKey: Self.savedActiveIndexKey)
@@ -219,10 +243,16 @@ final class TabManager: ObservableObject {
     /// that tab's real page on the next restart. webView.url has no such
     /// lag since it's read straight from WebKit, not our own mirror.
     private func saveState() {
+        var histories: [(URL, Data)] = []
         let urls = tabs.map { tab -> String in
             if let current = tab.controller.webView.url?.absoluteString {
                 tab.lastKnownURL = current
                 tab.loggedMissingURL = false
+                // Only with a real URL: before the first commit the state
+                // is empty and would replace the last good one.
+                if let state = tab.controller.savedInteractionState {
+                    histories.append((Self.historyURL(for: tab.persistentID), state))
+                }
                 return current
             }
             // webView.url can be nil while a tab hasn't committed its first
@@ -240,13 +270,19 @@ final class TabManager: ObservableObject {
         UserDefaults.standard.set(tabs.map(\.controller.pageTitle), forKey: Self.savedTitlesKey)
         let index = activeTabID.flatMap { id in tabs.firstIndex { $0.id == id } } ?? 0
         UserDefaults.standard.set(index, forKey: Self.savedActiveIndexKey)
+        DispatchQueue.global(qos: .utility).async {
+            for (file, state) in histories { try? state.write(to: file, options: .atomic) }
+        }
     }
 
-    /// Drops pictures left by tabs closed in an earlier version or run.
+    /// Drops pictures and histories left by tabs closed in an earlier
+    /// version or run.
     private func pruneThumbnails(keeping ids: Set<String>) {
-        let files = (try? FileManager.default.contentsOfDirectory(at: Self.thumbnailDirectory, includingPropertiesForKeys: nil)) ?? []
-        for file in files where !ids.contains(file.deletingPathExtension().lastPathComponent) {
-            try? FileManager.default.removeItem(at: file)
+        for directory in [Self.thumbnailDirectory, Self.historyDirectory] {
+            let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+            for file in files where !ids.contains(file.deletingPathExtension().lastPathComponent) {
+                try? FileManager.default.removeItem(at: file)
+            }
         }
     }
 }
