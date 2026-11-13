@@ -76,6 +76,7 @@ private struct BrowserTabContentView: View {
 
     @State private var isExtracting = false
     @State private var extractedImages: [PageImage] = []
+    @State private var extractedHeaders = PageRequestHeaders()
     @State private var showGrid = false
     @State private var showPaywall = false
     @State private var showMediaList = false
@@ -159,6 +160,7 @@ private struct BrowserTabContentView: View {
                 images: extractedImages,
                 pageTitle: controller.pageTitle,
                 pageURL: URL(string: controller.urlString),
+                requestHeaders: extractedHeaders,
                 store: store,
                 loadHistory: controller.canLoadHistory ? { await controller.historyImages() } : nil
             ) {
@@ -339,6 +341,7 @@ private struct BrowserTabContentView: View {
             }
         }
         .disabled(isExtracting)
+        .accessibilityLabel("画像を抽出")
     }
 
     /// Videos and audio on this page, with a count badge (from VideoBrowser).
@@ -410,6 +413,7 @@ private struct BrowserTabContentView: View {
         AppLog.log("一括抽出開始: \(controller.urlString)")
         do {
             extractedImages = try await controller.extractImages(withBackgrounds: true)
+            extractedHeaders = await controller.pageRequestHeaders()
             AppLog.log("一括抽出結果: \(extractedImages.count)件")
             UsageStats.extracted(page: URL(string: controller.urlString), total: extractedImages.count,
                                  shown: extractedImages.filter { $0.excluded == nil }.count)
@@ -451,6 +455,7 @@ private struct BrowserTabContentView: View {
                 return
             }
             AppLog.log("長押し: 照合で見つかった原寸画像を保存 \(WebViewController.shortPath(original.url))")
+            longPressSaver.requestHeaders = await controller.pageRequestHeaders()
             await longPressSaver.save([original], page: URL(string: controller.urlString), kind: "longpress_match")
             if case .finished(let succeeded, _, let message) = longPressSaver.state, succeeded == 0 {
                 longPressNotice = "保存に失敗しました。\(message ?? "")"
@@ -460,7 +465,10 @@ private struct BrowserTabContentView: View {
 
     private func saveSingle(_ url: URL) {
         let image = PageImage(id: 0, url: url, width: 0, height: 0, renderedURL: nil, origin: "dom")
-        Task { await longPressSaver.save([image], page: URL(string: controller.urlString), kind: "longpress") }
+        Task {
+            longPressSaver.requestHeaders = await controller.pageRequestHeaders()
+            await longPressSaver.save([image], page: URL(string: controller.urlString), kind: "longpress")
+        }
     }
 
     /// Prefers appearing above the touch point (matching Safari), flipping

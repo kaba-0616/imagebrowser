@@ -152,8 +152,29 @@ final class SaveFlowUITests: XCTestCase {
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label CONTAINS 'ストリーミング'")).count, 2)
     }
 
-    private func launch() -> XCUIApplication {
+    /// 7. 署名 Cookie が無いと画像が 403 になる CDN(mi-muse の再現)。ページの Cookie を
+    ///    付けて取りに行けば、グリッドの画像が 403 で落ちないこと(2026-11-14)。
+    ///    判定はシミュレータのログ(「グリッド画像の読み込み失敗」が出ないこと)で run_cookiegate.sh が行う。
+    func test7_ImageGridSendsPageCookies() throws {
+        // テストページの3枚は「other」判定で既定は隠れるので、全フィルタを
+        // オンにして表示させ、サムネイルの取得(URLSession)を実際に走らせる。
+        let app = launch(arguments: [
+            "-gridFilter.includeOtherPosts", "YES",
+            "-gridFilter.includeSourceOnly", "YES",
+            "-gridFilter.includeIcons", "YES",
+            "-gridFilter.includeBanners", "YES"
+        ])
+        open(app, "http://localhost:8767/gate.html")
+        sleep(8)
+        app.buttons["画像を抽出"].tap()
+        sleep(8)
+        shot("7-グリッド")
+        tree(app, "7-中身")
+    }
+
+    private func launch(arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "jp.kaba.imagebrowser")
+        app.launchArguments += arguments
         app.launch()
         sleep(4)
         return app

@@ -19,6 +19,11 @@ final class ImageLoader: ObservableObject {
     /// 読み取れた原寸のURL。全画面表示したときに埋まる。
     @Published private(set) var resolvedOriginals: [Int: URL] = [:]
 
+    /// The page's cookies/Referer/User-Agent, so image requests look like
+    /// the page's own. Without them a signed-cookie CDN answers 403 (see
+    /// PageRequestHeaders). Set before thumbnails are requested.
+    var requestHeaders = PageRequestHeaders()
+
     func trueSize(of image: PageImage) -> CGSize? {
         guard let size = pixelSizes[image.id] else { return nil }
         if image.originalPageURL != nil {
@@ -210,7 +215,11 @@ final class ImageLoader: ObservableObject {
     private func downloadThumbnail(
         url: URL, maxPixelSize: CGFloat, isSVG: Bool
     ) async throws -> (image: UIImage, pixelSize: CGSize?) {
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        for (name, value) in requestHeaders.headers(for: url) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw ImageLoadError.httpStatus(http.statusCode)
         }

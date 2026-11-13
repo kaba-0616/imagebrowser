@@ -37,6 +37,9 @@ struct ImageGridView: View {
     let images: [PageImage]
     let pageTitle: String
     let pageURL: URL?
+    /// The page's cookies/Referer/User-Agent, handed to the loader and the
+    /// saver so a signed-cookie CDN doesn't answer 403 (2026-11-14).
+    var requestHeaders = PageRequestHeaders()
     @ObservedObject var store: StoreManager
     /// "さかのぼり抽出": every photo the page's own data lists, not just what
     /// was scrolled into view. nil where the page offers no such data.
@@ -218,6 +221,12 @@ struct ImageGridView: View {
 
     var body: some View {
         mainContent
+            .onAppear {
+                // Before any cell requests its thumbnail: the page's cookies
+                // etc. so a signed-cookie CDN serves the images (2026-11-14).
+                loader.requestHeaders = requestHeaders
+                photoSaver.requestHeaders = requestHeaders
+            }
             .overlay(savingOverlay)
             .animation(.easeInOut(duration: 0.15), value: photoSaver.isSaving)
             .preferredColorScheme(.dark)

@@ -82,21 +82,20 @@ extension WebViewController {
     /// The headers a download sends so the server sees the same client the
     /// page is: this tab's cookies, Referer and User-Agent.
     func requestContext(for url: URL) async -> RequestContext {
-        var headers: [String: String] = [:]
+        RequestContext(headers: await pageRequestHeaders().headers(for: url))
+    }
+
+    /// This tab's cookies, Referer and User-Agent, captured once and then
+    /// applied to each image URL. The image grid and the photo save fetch
+    /// through this so they look like the page's own requests: mi-muse's
+    /// CDN serves only to requests carrying the page's CloudFront signed
+    /// cookies, so without them every image comes back HTTP 403 and the
+    /// grid shows ⚠ for all of them (2026-11-14).
+    func pageRequestHeaders() async -> PageRequestHeaders {
         let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
-        let matching = cookies.filter { cookie in
-            guard let host = url.host?.lowercased() else { return false }
-            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-            return host == domain || host.hasSuffix("." + domain)
-        }
-        headers.merge(HTTPCookie.requestHeaderFields(with: matching)) { $1 }
-        if let page = webView.url, page.scheme?.hasPrefix("http") == true {
-            headers["Referer"] = page.absoluteString
-        }
-        if let agent = try? await webView.evaluateJavaScript("navigator.userAgent") as? String {
-            headers["User-Agent"] = agent
-        }
-        return RequestContext(headers: headers)
+        let agent = (try? await webView.evaluateJavaScript("navigator.userAgent")) as? String
+        let referer = (webView.url?.scheme?.hasPrefix("http") == true) ? webView.url?.absoluteString : nil
+        return PageRequestHeaders(cookies: cookies, userAgent: agent, referer: referer)
     }
 
     func noteNavigationResponse(_ response: URLResponse) {

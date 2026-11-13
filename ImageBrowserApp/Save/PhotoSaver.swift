@@ -41,6 +41,10 @@ final class PhotoSaver: ObservableObject {
         return URLSession(configuration: config)
     }()
 
+    /// The page's cookies/Referer/User-Agent, applied to each fetch so a
+    /// signed-cookie CDN (mi-muse) doesn't answer 403. Set before saving.
+    var requestHeaders = PageRequestHeaders()
+
     /// `page` / `kind` are only for UsageStats (which site, which way).
     func save(_ images: [PageImage], page: URL? = nil, kind: String = "bulk") async {
         await saveImages(images)
@@ -216,7 +220,11 @@ final class PhotoSaver: ObservableObject {
     }
 
     private func fetch(_ url: URL, isSVG: Bool) async throws -> Data {
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        for (name, value) in requestHeaders.headers(for: url) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        let (data, response) = try await session.data(for: request)
         let statusCode = (response as? HTTPURLResponse)?.statusCode
         appendLog("取得: \(url.absoluteString) — HTTP \(statusCode.map(String.init) ?? "?") \(data.count)bytes")
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {

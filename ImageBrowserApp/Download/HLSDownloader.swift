@@ -15,6 +15,31 @@ struct RequestContext {
     }
 }
 
+/// A tab's cookies, Referer and User-Agent, captured once and applied to
+/// each image URL on demand. Cookies are filtered to the target host the
+/// way the browser would send them, so one snapshot serves images across
+/// the page's several CDN hosts (mi-muse: page on mi-muse.mi-glamu.com,
+/// images on cdn-mi-muse.mi-glamu.com, both under .mi-glamu.com).
+struct PageRequestHeaders {
+    var cookies: [HTTPCookie] = []
+    var userAgent: String?
+    var referer: String?
+
+    func headers(for url: URL) -> [String: String] {
+        var headers: [String: String] = [:]
+        if let host = url.host?.lowercased() {
+            let matching = cookies.filter { cookie in
+                let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                return host == domain || host.hasSuffix("." + domain)
+            }
+            headers.merge(HTTPCookie.requestHeaderFields(with: matching)) { $1 }
+        }
+        if let referer { headers["Referer"] = referer }
+        if let userAgent { headers["User-Agent"] = userAgent }
+        return headers
+    }
+}
+
 enum DownloadError: LocalizedError {
     case http(Int, String)
     case live
