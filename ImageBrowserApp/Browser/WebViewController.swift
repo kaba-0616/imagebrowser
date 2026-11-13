@@ -35,6 +35,12 @@ final class WebViewController: NSObject, ObservableObject {
     /// Videos and audio found on the current page, newest first (from
     /// MediaSniffer.js; see WebViewController+Media.swift).
     @Published var detectedMedia: [DetectedMedia] = []
+    /// host + path of every playlist a detected master playlist lists as its
+    /// quality or audio track (the same video again, kept out of the list),
+    /// to that master's id.
+    var hlsPartMasters: [String: String] = [:]
+    /// HLS playlists already fetched to see whether they're a master.
+    var checkedPlaylists: Set<String> = []
     /// Set when the long-press gesture resolves to an image URL on the page.
     /// BrowserView watches this to present the save menu.
     @Published var longPressedImageURL: URL?
@@ -1349,6 +1355,8 @@ extension WebViewController: WKNavigationDelegate {
         // A new document: what the previous page played is gone with it.
         // (Single-page sites that only change the URL keep their list.)
         detectedMedia.removeAll()
+        hlsPartMasters.removeAll()
+        checkedPlaylists.removeAll()
     }
 
     /// A link straight to a video/audio file: WebKit plays it in its own

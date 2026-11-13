@@ -137,6 +137,21 @@ final class SaveFlowUITests: XCTestCase {
         XCTAssertTrue((field.value as? String ?? "").contains("example.com"), "\(field.value ?? "")")
     }
 
+    /// 6. 親プレイリスト(a.m3u8)とその中身(a_hls.m3u8)を両方読むページで、同じ動画が
+    ///    2件に数えられないこと(mi-muse、2026-11-13)。無関係な b.m3u8 は残って計2件。
+    func test6_MasterAndVariantCountOnce() throws {
+        let app = launch()
+        open(app, "http://localhost:8766/dup.html")
+        sleep(6)
+        let button = app.buttons["動画・音声を保存"]
+        print("DUPCHECK value=\(button.value as? String ?? "")")
+        button.tap()
+        sleep(3)
+        shot("6-一覧")
+        tree(app, "6-中身")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label CONTAINS 'ストリーミング'")).count, 2)
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication(bundleIdentifier: "jp.kaba.imagebrowser")
         app.launch()

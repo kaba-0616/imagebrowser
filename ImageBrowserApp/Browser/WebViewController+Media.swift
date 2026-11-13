@@ -30,9 +30,47 @@ extension WebViewController {
             detectedMedia[index] = merged
             return
         }
+        if media.kind == .hls, let masterID = hlsPartMasters[Self.shortURL(media.url)] {
+            absorb(media, into: masterID)
+            return
+        }
         detectedMedia.insert(media, at: 0)
         if detectedMedia.count > 200 { detectedMedia.removeLast() }
         AppLog.log("検出: \(media.typeLabel) \(Self.shortURL(media.url)) 経路:\(via)")
+        if media.kind == .hls { checkMasterPlaylist(media) }
+    }
+
+    /// A master playlist and the playlists it lists are one video, but pages
+    /// load both (mi-muse: "x.m3u8" lists only "x_hls.m3u8", and both were
+    /// shown and batch-saved twice, 2026-11-13). Reads each HLS playlist once
+    /// and, for a master, drops the ones it lists -- the master keeps the
+    /// quality choice.
+    private func checkMasterPlaylist(_ media: DetectedMedia) {
+        guard checkedPlaylists.insert(Self.shortURL(media.url)).inserted else { return }
+        Task { @MainActor in
+            let context = await requestContext(for: media.url)
+            guard case .master(let master)? = try? await HLSDownloader(context: context).playlist(media.url),
+                  // The page moved on while this was loading.
+                  detectedMedia.contains(where: { $0.id == media.id }) else { return }
+            let parts = Set((master.variants.map(\.url) + master.audio.map(\.url)).map(Self.shortURL))
+                .subtracting([Self.shortURL(media.url)])
+            for path in parts { hlsPartMasters[path] = media.id }
+            for part in detectedMedia where part.kind == .hls && parts.contains(Self.shortURL(part.url)) {
+                absorb(part, into: media.id)
+            }
+        }
+    }
+
+    /// Drops `part` (a playlist the master `masterID` lists), handing the
+    /// master what it knew that the master didn't.
+    private func absorb(_ part: DetectedMedia, into masterID: String) {
+        detectedMedia.removeAll { $0.id == part.id }
+        AppLog.log("検出: \(Self.shortURL(part.url)) は別に検出した動画の画質違い・音声なので一覧から外した")
+        guard let index = detectedMedia.firstIndex(where: { $0.id == masterID }) else { return }
+        var master = detectedMedia[index]
+        if master.posterURL == nil { master.posterURL = part.posterURL }
+        if (master.duration ?? 0) == 0 { master.duration = part.duration }
+        detectedMedia[index] = master
     }
 
     /// host + path, without the query -- signed URLs carry hundreds of
