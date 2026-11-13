@@ -51,6 +51,12 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         NSPhotoLibraryAddUsageDescription: "抽出した画像や保存した動画をカメラロールに追加するために使用します。"
+        # ブラウザなので、ページ(WKWebView)だけは http も開く。無いとログイン後に
+        # http へ転送するサイト(mi-muse.mi-glamu.com → http://mi-glamu.com/profile)が
+        # NSURLErrorDomain -1022 で止まり、ゲージが進まないまま固まる(2026-11-13)。
+        # アプリ自身の通信(URLSession)は https のまま。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
         # imagebrowser用にAdMobコンソールで発行した実App ID。
         GADApplicationIdentifier: "ca-app-pub-1034383442757151~4077627135"
         # 利用状況の計測(UsageStats)は広告に使わない: 広告IDを集めず、広告の
@@ -135,7 +141,7 @@ targets:
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
         MARKETING_VERSION: "1.6.1"
-        CURRENT_PROJECT_VERSION: "0.4"
+        CURRENT_PROJECT_VERSION: "0.5"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:
