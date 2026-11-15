@@ -715,6 +715,12 @@ final class WebViewController: NSObject, ObservableObject {
         let path = url.path
         if path.contains("/tutorial-contents/") { return "tutorial" }
         if path.contains("/splash/img/") { return "splash" }
+        // Message apps' news popup pictures (/v2/announcements): the photo
+        // inside the お知らせ dialog, not the talk's own photos.
+        if path.range(of: #"/announcements/(images|thumbnails)/"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil {
+            return "news"
+        }
         if path.range(of: #"/favicon\.[a-z]+$|/icons/Icon-(maskable-)?\d+\.png$|/(members|groups|users)/(thumbnails|phone-images)/|/app_configs/"#,
                       options: [.regularExpression, .caseInsensitive]) != nil {
             return "icon"

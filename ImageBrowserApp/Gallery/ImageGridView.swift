@@ -66,6 +66,8 @@ struct ImageGridView: View {
     @AppStorage("gridFilter.includeMetaImages") private var includeMetaImages = false
     @AppStorage("gridFilter.includeTutorials") private var includeTutorials = false
     @AppStorage("gridFilter.includeSplash") private var includeSplash = false
+    /// The photo inside a message app's news (お知らせ) popup.
+    @AppStorage("gridFilter.includeNews") private var includeNews = false
     /// Both the tagged UI pictures and anything measured at 200px or less.
     @AppStorage("gridFilter.includeIcons") private var includeIcons = false
     /// Four times longer than deep: a banner, a rule or a header.
@@ -101,6 +103,7 @@ struct ImageGridView: View {
             guard includeMetaImages || image.excluded != "cover" else { return false }
             guard includeTutorials || image.excluded != "tutorial" else { return false }
             guard includeSplash || image.excluded != "splash" else { return false }
+            guard includeNews || image.excluded != "news" else { return false }
             guard includeIcons || !isIcon(image) else { return false }
             guard includeBanners || !isBanner(image) else { return false }
             guard includeFailed || !loader.failed.contains(image.id) else { return false }
@@ -125,6 +128,7 @@ struct ImageGridView: View {
     private var metaImageCount: Int { count { $0.excluded == "cover" } }
     private var tutorialCount: Int { count { $0.excluded == "tutorial" } }
     private var splashCount: Int { count { $0.excluded == "splash" } }
+    private var newsCount: Int { count { $0.excluded == "news" } }
     private var iconCount: Int { count(isIcon) }
     private var bannerCount: Int { count(isBanner) }
     private var failedCount: Int { count { loader.failed.contains($0.id) } }
@@ -138,6 +142,7 @@ struct ImageGridView: View {
             || (!includeMetaImages && metaImageCount > 0)
             || (!includeTutorials && tutorialCount > 0)
             || (!includeSplash && splashCount > 0)
+            || (!includeNews && newsCount > 0)
             || (!includeIcons && iconCount > 0)
             || (!includeBanners && bannerCount > 0)
             || (!includeFailed && failedCount > 0)
@@ -394,6 +399,7 @@ struct ImageGridView: View {
             filterToggle("ページ情報の画像", count: metaImageCount, isOn: $includeMetaImages)
             filterToggle("操作説明の画像", count: tutorialCount, isOn: $includeTutorials)
             filterToggle("起動画面のロゴ", count: splashCount, isOn: $includeSplash)
+            filterToggle("ニュースのお知らせ画像", count: newsCount, isOn: $includeNews)
             filterToggle("横長のバナー画像", count: bannerCount, isOn: $includeBanners)
             filterToggle("小さなアイコン類", count: iconCount, isOn: $includeIcons)
             filterToggle("読み込みに失敗した画像", count: failedCount, isOn: $includeFailed)
