@@ -102,19 +102,41 @@ iOS は MP3 を書き出せないので、LAME 3.100(LGPL v2 以降)を同梱し
 - **差分ビルドの罠:** `#if canImport(LameMP3)` にしていた頃、フレームワークを足しても
   AudioConverter.swift が再コンパイルされず、MP3 の分岐が黙って消えていた。今は普通に `import LameMP3`。
 
-## 審査提出(2.0.0、2026-11-19)
+## 審査提出(2.0.0、2026-11-20 に API で提出完了)
 
-1.6.0 以降の動画・音声保存と Pro+ 追加をまとめて **2.0.0 ビルド1** で提出する(MAJOR はユーザー判断)。
-提出準備は API で済ませ、最後の「提出」だけ ASC 画面から行う(推しカウントで API 提出が 409 で
-通らなかった実績があるため)。
+1.6.0 以降の動画・音声保存と Pro+ 追加をまとめて **2.0.0 ビルド1** で提出した(MAJOR はユーザー判断)。
+**提出まで全部 ASC API で行った**(推しカウントで詰まった 409 は旧 `appStoreVersion` の
+submitForReview の話。今回はモダンな `reviewSubmissions` フローなので通る)。
 
 - ASC の Pro+ 2商品: 価格は全175か国・名前(ja)あり。**審査用スクショを 11-19 にアップロードして
   `MISSING_METADATA` → `READY_TO_SUBMIT` に解消**(`356257f1-image.png` = プラン一覧画面を両商品へ)。
 - App Store 版 **2.0.0** を作成(id `b5e79f1d-…`)、**build 1**(VALID)を添付、輸出コンプライアンスは
   非該当宣言済み(usesNonExemptEncryption=False)。説明文に動画・音声/Pro+ を追記、「新機能」を設定。
 - **プライバシーポリシー(Notion)は 11-10 の統合時に既に画像・動画・音声へ対応済み**(追加変更なし)。
-- 残り: ユーザーが ASC 画面で 2.0.0 を「提出」し、その際に Pro+ 月額・年額を添付する。
-  提出直後に両商品が `WAITING_FOR_REVIEW` になることを確認する。
+
+### reviewSubmissions フローでの提出手順(この型が他アプリでも使える)
+
+初回のサブスク(Pro+)は**アプリのバージョンと同梱必須**。バージョンだけ提出しても
+READY_TO_SUBMIT のサブスクは自動では束ねられない(既存グループへの追加だと特に)。
+`reviewSubmissions` に本体とサブスクを**明示的に項目追加**する:
+
+1. `POST /v1/reviewSubmissions`(platform IOS・app 関連付け)で submission 作成。
+2. `POST /v1/reviewSubmissionItems` で項目追加。リレーション名とデータ型に注意:
+   - 本体: リレーション `appStoreVersion` → 型は複数形 **`appStoreVersions`**、id はバージョン id。
+   - サブスク: リレーション `subscriptionVersion` → 型 **`subscriptionVersions`**。
+     **id はサブスク id ではなく、`GET /v1/subscriptions/{id}/versions` で取る「版」の id。**
+     サブスク id を渡すと「This resource cannot be reviewed」= 実体は
+     `meta.associatedErrors` の 404「SubscriptionVersions に id 無し」。
+     (`subscription` 直リレーションは無い。`subscriptionVersions` は GET_COLLECTION 不可。)
+3. `PATCH /v1/reviewSubmissions/{id}` に `attributes.submitted=true` で提出。
+   直後にバージョンと各サブスクが `WAITING_FOR_REVIEW` になる。
+
+- 提出済み submission は項目追加不可(STATE_ERROR)。やり直すときは
+  `PATCH …/{id}` に `attributes.canceled=true`。ただし **canceled にすると
+  WAITING_FOR_REVIEW のバージョンは `DEVELOPER_REJECTED` に落ちる**(PREPARE には戻らない)。
+  この状態からでも新しい submission に本体として再追加・再提出できた。
+- 今回のログ: submission `d074e5ba-…`、本体 `b5e79f1d-…`、
+  Pro+ 月額版 `94de2915-…`、年額版 `e76dd945-…`。2026-11-20 に 3件とも WAITING_FOR_REVIEW。
 
 ### 以前の残作業(消化済み)
 
