@@ -137,6 +137,19 @@ READY_TO_SUBMIT のサブスクは自動では束ねられない(既存グルー
   この状態からでも新しい submission に本体として再追加・再提出できた。
 - 今回のログ: submission `d074e5ba-…`、本体 `b5e79f1d-…`、
   Pro+ 月額版 `94de2915-…`、年額版 `e76dd945-…`。2026-11-20 に 3件とも WAITING_FOR_REVIEW。
+  → 2026-11-21 に承認・自動公開(2.0.0 READY_FOR_DISTRIBUTION、Pro+ 2商品 APPROVED)。
+
+### 2.1.0(2026-11-21 提出、バージョン単体)
+
+2.0.0 公開後の新機能で **2.1.0 ビルド1** を提出(画像の「ファイル」保存、課金画面の
+無料トライアル案内、TestFlight 用 Pro+ テスト解除)。Pro+ は承認済み・無料トライアルは
+審査不要のメタデータなので、**サブスクは同梱せずバージョン単体**で提出した。
+version `83c56188-…`、submission `12a2f56b-…`。説明文・新機能・レビューメモを更新。
+- 無料トライアル(Pro+ 月額/年額・初回7日間)は 2026-11-20 に ASC へ全133地域ぶん登録済み
+  (`subscriptionIntroductoryOffers`、FREE_TRIAL/ONE_WEEK)。地域ごとに作る必要があり、
+  `territory` 関連付けが必須。版の id は `GET /v1/subscriptions/{id}/versions` で取る。
+- 課金画面は StoreKit の `introductoryOffer` から「最初の7日間無料」を表示
+  (PaywallView / PlanListView、`freeTrialLabel`)。新規のみ・期間終了後に自動更新を明記。
 
 ### 以前の残作業(消化済み)
 
