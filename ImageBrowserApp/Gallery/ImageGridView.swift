@@ -253,6 +253,30 @@ struct ImageGridView: View {
             .sheet(isPresented: $showPaywall) {
                 PaywallView(store: store) { showPaywall = false }
             }
+            .sheet(isPresented: Binding(
+                get: { !photoSaver.exportFiles.isEmpty },
+                set: { if !$0 { photoSaver.clearExportFiles() } }
+            )) {
+                FilesExporter(files: photoSaver.exportFiles) { _ in
+                    photoSaver.clearExportFiles()
+                }
+            }
+    }
+
+    /// Runs the bulk save for the chosen destination. Photos hides the saved
+    /// cells; Files writes temp copies and opens the export sheet (via
+    /// photoSaver.exportFiles), leaving the cells in place.
+    private func runSave(to destination: SaveDestination) {
+        let targets = selectedVisible
+        Task {
+            switch destination {
+            case .photos:
+                await photoSaver.save(targets, page: pageURL, kind: "bulk")
+                selected.subtract(photoSaver.savedImageIDs)
+            case .files:
+                await photoSaver.saveToFiles(targets, page: pageURL, kind: "bulk_files")
+            }
+        }
     }
 
     @ViewBuilder
@@ -570,11 +594,16 @@ struct ImageGridView: View {
 
                 Spacer()
 
-                Button {
-                    let targets = selectedVisible
-                    Task {
-                        await photoSaver.save(targets, page: pageURL, kind: "bulk")
-                        selected.subtract(photoSaver.savedImageIDs)
+                Menu {
+                    Button {
+                        runSave(to: .photos)
+                    } label: {
+                        Label("写真に保存", systemImage: "photo")
+                    }
+                    Button {
+                        runSave(to: .files)
+                    } label: {
+                        Label("ファイルに保存", systemImage: "folder")
                     }
                 } label: {
                     Text("保存する (\(selectedVisible.count))").bold()

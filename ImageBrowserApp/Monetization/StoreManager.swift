@@ -73,6 +73,20 @@ final class StoreManager: ObservableObject {
 
     private var proSuppressed: Bool { Self.isTestBuild && ignoreProForTesting }
 
+    /// TestFlight/simulator only: unlock Pro+ (video/audio too) without a
+    /// sandbox subscription -- a "買い切り" for testing paid features, which a
+    /// sandbox subscription makes awkward (fast renewals, expiry). Persisted
+    /// like a real purchase. Ignored on App Store builds, and `ignoreProForTesting`
+    /// still wins (so the free-user flows stay testable).
+    @Published var forceProPlusForTesting = UserDefaults.standard.bool(forKey: "forceProPlusForTesting") {
+        didSet {
+            UserDefaults.standard.set(forceProPlusForTesting, forKey: "forceProPlusForTesting")
+            Task { await refreshEntitlements() }
+        }
+    }
+
+    private var testUnlock: Bool { Self.isTestBuild && forceProPlusForTesting }
+
     init() {
         transactionListenerTask = Task { [weak self] in
             for await update in Transaction.updates {
@@ -132,9 +146,9 @@ final class StoreManager: ObservableObject {
         activeProductID = active?.rawValue
         ownsLifetime = owned.contains(.lifetime)
         UsageStats.setPlan(active?.rawValue)
-        hasPurchasedPro = active != nil || Self.isSimulator
+        hasPurchasedPro = active != nil || Self.isSimulator || testUnlock
         isPro = hasPurchasedPro && !proSuppressed
-        canSaveMedia = (owned.contains(where: \.includesMedia) || Self.isSimulator) && !proSuppressed
+        canSaveMedia = (owned.contains(where: \.includesMedia) || Self.isSimulator || testUnlock) && !proSuppressed
         hasCheckedEntitlements = true
     }
 

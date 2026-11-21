@@ -83,11 +83,12 @@ struct SettingsView: View {
                 // TestFlight/simulator builds only -- never shown on App Store installs.
                 if StoreManager.isTestBuild {
                     Section {
+                        Toggle("Pro+ をテスト解除(買い切り相当)", isOn: $store.forceProPlusForTesting)
                         Toggle("Proを一時的に無効にする", isOn: $store.ignoreProForTesting)
                     } header: {
                         Text(StoreManager.isSimulator ? "テスト用(シミュレータ)" : "テスト用(TestFlight版のみ)")
                     } footer: {
-                        Text("無料ユーザーの動作(広告・リワード広告など)を確認するための設定です。購入は取り消されません。")
+                        Text("「テスト解除」はサンドボックス購入なしで Pro+(動画・音声含む)を解除します。「一時的に無効」は無料ユーザーの動作(広告・リワード広告など)の確認用で、両方オンなら無効が優先されます。購入は取り消されません。")
                     }
                 }
 

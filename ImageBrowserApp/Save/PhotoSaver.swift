@@ -25,6 +25,10 @@ final class PhotoSaver: ObservableObject {
     @Published private(set) var state: SaveState = .idle
     /// IDs that made it into the photo library; the grid hides these.
     @Published private(set) var savedImageIDs: Set<Int> = []
+    /// Files written for a "save to Files" run, waiting for the export sheet.
+    /// Empty once the sheet is dismissed. Unlike Photos saves, these don't
+    /// hide the grid cell -- the real save is the folder the user then picks.
+    @Published var exportFiles: [URL] = []
     /// Human-readable trace of the last save run -- when a save "does not
     /// show up", this is what tells whether it never started, failed to
     /// fetch, failed to decode, or failed to write to the library.
@@ -52,6 +56,79 @@ final class PhotoSaver: ObservableObject {
             UsageStats.saved(page: page, kind: kind, succeeded: succeeded, failed: failed)
             if succeeded > 0 { ReviewPrompt.recordSuccess() }
         }
+    }
+
+    /// Downloads the chosen images to temp files and hands the URLs to
+    /// `exportFiles` for the Files export sheet (the same sheet video/audio
+    /// use). SVG is kept as .svg, everything else keeps its original bytes and
+    /// extension -- no re-encode, so Files gets the picture exactly as served.
+    func saveToFiles(_ images: [PageImage], page: URL? = nil, kind: String = "bulk_files") async {
+        log.removeAll()
+        exportFiles = []
+
+        guard !images.isEmpty else {
+            appendLog("保存対象が0件です", isError: true)
+            state = .finished(succeeded: 0, failed: 0, message: "画像が選択されていません")
+            return
+        }
+
+        state = .saving(done: 0, total: images.count)
+        appendLog("ファイルへ保存開始: \(images.count)件")
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ImageExport", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        var urls: [URL] = []
+        var usedNames: Set<String> = []
+        var succeeded = 0
+        var failed = 0
+        var lastError: String?
+
+        for image in images {
+            do {
+                let data = try await fetch(image)
+                let ext = fileExtension(for: image)
+                var base = FileNaming.sanitized(image.url.deletingPathExtension().lastPathComponent, fallback: "image")
+                if base == "image", !image.url.lastPathComponent.isEmpty {
+                    base = FileNaming.sanitized(image.url.lastPathComponent, fallback: "image")
+                }
+                var name = "\(base).\(ext)"
+                var n = 2
+                while usedNames.contains(name.lowercased()) { name = "\(base)_\(n).\(ext)"; n += 1 }
+                usedNames.insert(name.lowercased())
+
+                let dest = folder.appendingPathComponent(name)
+                try data.write(to: dest)
+                urls.append(dest)
+                succeeded += 1
+                appendLog("OK(ファイル): \(name)")
+            } catch {
+                failed += 1
+                lastError = error.localizedDescription
+                appendLog("失敗: \(image.url.lastPathComponent) — \(error.localizedDescription)", isError: true)
+            }
+            state = .saving(done: succeeded + failed, total: images.count)
+        }
+
+        exportFiles = urls
+        appendLog("完了(ファイル): 成功\(succeeded) 失敗\(failed)")
+        state = .finished(succeeded: succeeded, failed: failed, message: failed > 0 ? lastError : nil)
+
+        if succeeded > 0 {
+            UsageStats.saved(page: page, kind: kind, succeeded: succeeded, failed: failed)
+            ReviewPrompt.recordSuccess()
+        }
+    }
+
+    /// The extension the Files copy should carry. SVG stays .svg; otherwise the
+    /// URL's own extension, cleaned to letters/digits, or jpg as a last resort.
+    private func fileExtension(for image: PageImage) -> String {
+        if image.isSVG { return "svg" }
+        let raw = image.url.pathExtension.lowercased()
+        let cleaned = raw.filter { $0.isLetter || $0.isNumber }
+        return (cleaned.isEmpty || cleaned.count > 5) ? "jpg" : cleaned
     }
 
     private func saveImages(_ images: [PageImage]) async {
@@ -163,6 +240,16 @@ final class PhotoSaver: ObservableObject {
 
     func reset() {
         state = .idle
+    }
+
+    /// Drops the Files export list and deletes the temp copies it pointed at
+    /// (the system already copied them into the chosen folder, or the user
+    /// cancelled). Called when the export sheet closes.
+    func clearExportFiles() {
+        if let folder = exportFiles.first?.deletingLastPathComponent() {
+            try? FileManager.default.removeItem(at: folder)
+        }
+        exportFiles = []
     }
 
     private func appendLog(_ text: String, isError: Bool = false) {
