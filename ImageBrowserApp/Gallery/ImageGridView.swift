@@ -594,19 +594,23 @@ struct ImageGridView: View {
 
                 Spacer()
 
+                // Tap saves to Photos (the common case); long-press opens the
+                // menu to pick Files instead (user request, 2026-11-21).
                 Menu {
-                    Button {
-                        runSave(to: .photos)
-                    } label: {
-                        Label("写真に保存", systemImage: "photo")
-                    }
                     Button {
                         runSave(to: .files)
                     } label: {
                         Label("ファイルに保存", systemImage: "folder")
                     }
+                    Button {
+                        runSave(to: .photos)
+                    } label: {
+                        Label("写真に保存", systemImage: "photo")
+                    }
                 } label: {
                     Text("保存する (\(selectedVisible.count))").bold()
+                } primaryAction: {
+                    runSave(to: .photos)
                 }
                 .disabled(selectedVisible.isEmpty)
             }
