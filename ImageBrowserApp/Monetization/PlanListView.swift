@@ -97,11 +97,16 @@ struct PlanListView: View {
             Text(product.description)
                 .font(.footnote)
                 .foregroundColor(.secondary)
+            if let trial = Self.freeTrialLabel(product), store.activeProductID != product.id {
+                Label("\(trial)(新規の方のみ・期間終了後に自動更新)", systemImage: "gift.fill")
+                    .font(.caption.bold())
+                    .foregroundColor(.green)
+            }
             if store.activeProductID == product.id {
                 currentPlanLabel
             } else if !ownsLifetime || ProProduct(rawValue: product.id)?.includesMedia == true {
                 // 買い切りの人は Pro のままなので、動画の付く Pro+ だけを勧める。
-                Button(store.hasPurchasedPro ? "このプランに切り替える" : "登録する") {
+                Button(planButtonTitle(product)) {
                     Task { await purchase(product) }
                 }
                 .buttonStyle(.borderedProminent)
@@ -125,6 +130,27 @@ struct PlanListView: View {
         @unknown default: return ""
         }
         return period.value == 1 ? " / \(unit)" : " / \(period.value)\(unit == "月" ? "か月" : unit)"
+    }
+
+    /// "最初の7日間無料" etc. from the product's introductory free trial, or nil
+    /// when the plan has none. Read from StoreKit so it matches what the App
+    /// Store actually offers. Eligibility (new subscribers only) is Apple's.
+    static func freeTrialLabel(_ product: Product) -> String? {
+        guard let offer = product.subscription?.introductoryOffer,
+              offer.paymentMode == .freeTrial else { return nil }
+        let period = offer.period
+        switch period.unit {
+        case .day: return "最初の\(period.value)日間無料"
+        case .week: return "最初の\(period.value * 7)日間無料"
+        case .month: return "最初の\(period.value)か月無料"
+        case .year: return "最初の\(period.value)年無料"
+        @unknown default: return nil
+        }
+    }
+
+    private func planButtonTitle(_ product: Product) -> String {
+        if store.hasPurchasedPro { return "このプランに切り替える" }
+        return Self.freeTrialLabel(product) != nil ? "無料で試す" : "登録する"
     }
 
     private func purchase(_ product: Product) async {

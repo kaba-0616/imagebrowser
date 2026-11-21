@@ -97,7 +97,15 @@ struct PaywallView: View {
                     .disabled(purchasing != nil)
 
                     // Guideline 3.1.2(c): 期間・自動更新・利用規約・プライバシーポリシーを
-                    // 購入画面そのものに出す(PlanListView と同じ内容)。
+                    // 購入画面そのものに出す(PlanListView と同じ内容)。無料トライアルが
+                    // ある場合は、対象(新規のみ)と期間終了後に課金されることも明記する。
+                    if sortedProducts.contains(where: { PlanListView.freeTrialLabel($0) != nil }) {
+                        Text("無料トライアルは過去に利用していない新規の方が対象です。無料期間の終了時に、上記の料金で自動更新が始まります。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+
                     Text("サブスクリプションは自動更新されます。いつでも「設定」アプリの自分のApple IDからキャンセルできます。")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -155,6 +163,11 @@ struct PaywallView: View {
                 Text(product.description)
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if let trial = PlanListView.freeTrialLabel(product) {
+                    Label(trial, systemImage: "gift.fill")
+                        .font(.caption.bold())
+                        .foregroundColor(.green)
+                }
             }
             Spacer()
             if purchasing == product.id {
