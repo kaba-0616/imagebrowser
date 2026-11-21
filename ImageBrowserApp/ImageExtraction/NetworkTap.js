@@ -249,7 +249,7 @@
     // PerformanceObserverはバッファの消去や上限の影響を受けずに届く。
     var seenImages = {};
     var SEEN_IMAGE = /\.(?:jpe?g|png|gif|webp)(?:\?|#|$)/i;
-    var SEEN_SKIP = /\/favicon\.[a-z]+(\?|#|$)|\/icons\/Icon-(maskable-)?\d+\.png|\/(members|groups|users)\/(thumbnails|phone-images)\/|\/app_configs\/|\/splash\/img\//i;
+    var SEEN_SKIP = /\/favicon\.[a-z]+(\?|#|$)|\/icons\/Icon-(maskable-)?\d+\.png|\/(members|groups|users)\/(thumbnails|phone-images)\/|\/phone-?images?\/|\/app_configs\/|\/splash\/img\//i;
     try {
         new PerformanceObserver(function (list) {
             try {

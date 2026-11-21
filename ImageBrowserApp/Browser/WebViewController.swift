@@ -461,7 +461,19 @@ final class WebViewController: NSObject, ObservableObject {
                 excluded: excluded
             )
         }
-        let result = nonNetwork + networkImages
+        var result = nonNetwork + networkImages
+        // The network-path siteAsset filter above only ran over `baseCandidates`
+        // (origin == "network"). Member/group avatars that reach the result via
+        // DOM or the site's IndexedDB cache (origin != "network") slipped past it
+        // and showed up as savable photos (seen on device: the 坂道 message apps'
+        // member portraits and the talk's own avatar). Mark any site asset as an
+        // icon here too, whatever its origin -- message photos (`/messages/files/`)
+        // never match siteAssetReason, so real photos are untouched.
+        for i in result.indices where result[i].excluded == nil {
+            if let reason = Self.siteAssetReason(result[i].url) {
+                result[i].excluded = reason
+            }
+        }
         var excludedByReason: [String: Int] = [:]
         for image in result { if let reason = image.excluded { excludedByReason[reason, default: 0] += 1 } }
         let excludedText = excludedByReason.sorted { $0.value > $1.value }
@@ -721,7 +733,10 @@ final class WebViewController: NSObject, ObservableObject {
                       options: [.regularExpression, .caseInsensitive]) != nil {
             return "news"
         }
-        if path.range(of: #"/favicon\.[a-z]+$|/icons/Icon-(maskable-)?\d+\.png$|/(members|groups|users)/(thumbnails|phone-images)/|/app_configs/"#,
+        // `/phone-?images?/` also catches 日向坂's legacy avatar path
+        // `legacy-K/phoneimage/<hash>.jpg` (no hyphen, not under
+        // members/groups/users), seen leaking into results on device.
+        if path.range(of: #"/favicon\.[a-z]+$|/icons/Icon-(maskable-)?\d+\.png$|/(members|groups|users)/(thumbnails|phone-images)/|/phone-?images?/|/app_configs/"#,
                       options: [.regularExpression, .caseInsensitive]) != nil {
             return "icon"
         }

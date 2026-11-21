@@ -141,10 +141,13 @@ targets:
         # 2.0.0(ビルド1)を2026-11-20にAPIで審査提出→自動公開。2.0.1(ビルド0.1〜0.2)に
         # 新機能(画像のファイル保存・課金画面の無料トライアル案内)が入ったため、
         # 2026-11-21の審査提出時に2.1.0ビルド1へ付け替え。TestFlight用Pro+テスト解除も含む。
+        # 2.1.0は審査中(WAITING_FOR_REVIEW)。2.1.1は次版の仮番号で、坂道メッセージ
+        # アプリのメンバーアイコン(members/groups thumbnails・legacy phoneimage)が
+        # 抽出結果に混ざる不具合の修正から開発ビルド0.1で開始(2026-11-21)。
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
-        MARKETING_VERSION: "2.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "2.1.1"
+        CURRENT_PROJECT_VERSION: "0.1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:
