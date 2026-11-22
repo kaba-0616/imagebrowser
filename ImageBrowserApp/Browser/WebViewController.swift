@@ -736,7 +736,10 @@ final class WebViewController: NSObject, ObservableObject {
         // `/phone-?images?/` also catches 日向坂's legacy avatar path
         // `legacy-K/phoneimage/<hash>.jpg` (no hyphen, not under
         // members/groups/users), seen leaking into results on device.
-        if path.range(of: #"/favicon\.[a-z]+$|/icons/Icon-(maskable-)?\d+\.png$|/(members|groups|users)/(thumbnails|phone-images)/|/phone-?images?/|/app_configs/"#,
+        // `/organization_configs/files/` is the per-organization config asset,
+        // e.g. Yodel's「Web決済でお得に購読」promo banner -- a site-config
+        // picture like app_configs, never a posted photo (user request to hide).
+        if path.range(of: #"/favicon\.[a-z]+$|/icons/Icon-(maskable-)?\d+\.png$|/(members|groups|users)/(thumbnails|phone-images)/|/phone-?images?/|/(app_configs|organization_configs)/"#,
                       options: [.regularExpression, .caseInsensitive]) != nil {
             return "icon"
         }

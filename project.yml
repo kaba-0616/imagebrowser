@@ -144,10 +144,11 @@ targets:
         # 2.1.0は審査中(WAITING_FOR_REVIEW)。2.1.1は次版の仮番号で、坂道メッセージ
         # アプリのメンバーアイコン(members/groups thumbnails・legacy phoneimage)が
         # 抽出結果に混ざる不具合の修正から開発ビルド0.1で開始(2026-11-21)。
+        # ビルド0.2(2026-11-22): yodel等の販促バナー(organization_configs/files)を除外に追加。
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
         MARKETING_VERSION: "2.1.1"
-        CURRENT_PROJECT_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "0.2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:
