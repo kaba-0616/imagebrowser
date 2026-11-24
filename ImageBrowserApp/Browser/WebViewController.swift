@@ -884,7 +884,18 @@ final class WebViewController: NSObject, ObservableObject {
                 Task { @MainActor in
                     guard let self else { return }
                     let newURL = webView.url?.absoluteString ?? ""
-                    if newURL != self.urlString { self.resetNetworkImageHistory(to: newURL) }
+                    if newURL != self.urlString {
+                        self.resetNetworkImageHistory(to: newURL)
+                        // A same-document move to another page (pushState):
+                        // reset the media list as a full load would, but only
+                        // when the host or path actually changes, so a feed
+                        // updating its own query string doesn't wipe the list.
+                        let old = URL(string: self.urlString)
+                        let new = URL(string: newURL)
+                        if old?.host != new?.host || old?.path != new?.path {
+                            self.resetDetectedMedia()
+                        }
+                    }
                     self.urlString = newURL
                     if !newURL.isEmpty {
                         // Not on a relaunched tab's first URL (lastLoadedURL
@@ -1377,7 +1388,16 @@ extension WebViewController: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         // A new document: what the previous page played is gone with it.
-        // (Single-page sites that only change the URL keep their list.)
+        resetDetectedMedia()
+    }
+
+    /// Clears the current page's detected video/audio list and its HLS
+    /// bookkeeping. Called on a full document load (didCommit) and, for
+    /// single-page sites, on a move to another page (the `url` observer):
+    /// Instagram switches between posts with pushState, which never fires
+    /// didCommit, so the previous post's videos used to pile up in the list
+    /// until the user left Instagram entirely.
+    func resetDetectedMedia() {
         detectedMedia.removeAll()
         hlsPartMasters.removeAll()
         checkedPlaylists.removeAll()
@@ -1390,6 +1410,37 @@ extension WebViewController: WKNavigationDelegate {
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         noteNavigationResponse(navigationResponse.response)
         decisionHandler(.allow)
+    }
+
+    /// Keeps a tapped link inside this browser instead of handing it off to a
+    /// native app that claims the same domain via a Universal Link (YouTube
+    /// being the one users hit). WKWebView routes a user-activated https link
+    /// to such a domain to the installed app; re-loading the request ourselves
+    /// makes it a programmatic load, which iOS does not send through the
+    /// Universal Link, so it opens here. Only link taps on app-claimed hosts
+    /// are intercepted -- our own `webView.load` comes back as `.other` (no
+    /// loop) and every other navigation is allowed through untouched.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if navigationAction.navigationType == .linkActivated,
+           navigationAction.targetFrame?.isMainFrame ?? true,
+           let url = navigationAction.request.url,
+           let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+           Self.keepsInBrowser(url) {
+            decisionHandler(.cancel)
+            webView.load(navigationAction.request)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    /// Hosts whose native app would otherwise steal a tapped link via a
+    /// Universal Link. Matched by suffix so every subdomain (m./music./www.)
+    /// is covered.
+    private static func keepsInBrowser(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        let domains = ["youtube.com", "youtu.be"]
+        return domains.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
