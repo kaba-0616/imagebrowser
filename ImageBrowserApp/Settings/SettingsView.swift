@@ -106,6 +106,21 @@ struct SettingsView: View {
                     Text("画像・動画の抽出・保存を行ったサイトのドメイン(例: sakurazaka46.com)と件数、購入の有無を送信し、対応サイトの改善に使います。ページのURL・画像・入力内容は送信しません。")
                 }
 
+                Section {
+                    Link(destination: URL(string: "https://x.com/kaba_apps")!) {
+                        HStack {
+                            Text("最新情報はXでチェック")
+                            Spacer()
+                            Text("@kaba_apps")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("最新情報")
+                } footer: {
+                    Text("アップデートや新機能のお知らせをXで発信しています。")
+                }
+
                 Section("サポート") {
                     Link("プライバシーポリシー", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e8167ba4ff8b30c4f8b99")!)
                     Link("サポート", destination: URL(string: "https://nova-droplet-464.notion.site/ImageBrowser-3e5296d4576e815cb39acc3d6bc37793")!)
