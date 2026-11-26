@@ -148,10 +148,12 @@ targets:
         # ビルド0.3(2026-11-24): YouTube等のユニバーサルリンクをアプリ内ブラウザで開くよう修正、
         # インスタのSPAページ遷移で動画一覧をリセット。
         # ビルド0.4(2026-11-26): 設定に「最新情報はXでチェック」(@kaba_apps)の導線を追加。
+        # ビルド0.5(2026-11-26): 利用状況にパス(どのページか)を追加。クエリ・フラグメントは除去、
+        # 署名トークン等の長い英数字はマスク。ダッシュボードのドメイン行から配下ページを見るため。
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
         MARKETING_VERSION: "2.1.1"
-        CURRENT_PROJECT_VERSION: "0.4"
+        CURRENT_PROJECT_VERSION: "0.5"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:

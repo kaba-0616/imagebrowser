@@ -5,9 +5,11 @@ import FirebaseAnalytics
 /// どのサイトで抽出・保存が使われ、どこで購入画面が出て、何が買われたかを
 /// Firebase Analytics へ送る(2026-11-02、サイトごとのチューニングのため)。
 ///
-/// 送るのはホスト名(`message.sakurazaka46.com` まで。パスとクエリは送らない
-/// ――署名付き URL やログイン情報が入ることがある)と件数・種類だけ。画像や
-/// ページの中身は送らない。設定の「利用状況を送信する」で止められる(既定オン)。
+/// 送るのはホスト名(`message.sakurazaka46.com`)と、その配下のパス
+/// (`/creator/12345` ――どのページかを見るため。クエリ `?...`・フラグメント
+/// `#...` は送らず、署名トークン等の長い英数字の連なりは `*` に伏せる)、
+/// それに件数・種類だけ。画像やページの中身は送らない。設定の「利用状況を
+/// 送信する」で止められる(既定オン)。
 enum UsageStats {
     private static let enabledKey = "usageStatsEnabled"
 
@@ -47,22 +49,50 @@ enum UsageStats {
         return String(host.prefix(100))
     }
 
+    /// ドメイン配下の「どのページか」を見るためのパス(クエリ `?...` と
+    /// フラグメント `#...` は必ず落とす)。署名付き URL・セッション等が入らない
+    /// よう、英数字が長く連なる区切り(トークン・ハッシュ)は `*` に伏せる。
+    /// 短い ID(例 /creator/12345)はそのまま残す。最大 120 文字。
+    static func path(of url: URL?) -> String {
+        guard let url, let host = url.host, !host.isEmpty else { return "" }
+        var p = url.path   // url.path はクエリ・フラグメントを含まない
+        if p.isEmpty { p = "/" }
+        return String(maskTokens(p).prefix(120))
+    }
+
+    /// 24 文字以上続く ASCII 英数字(と - _ =)の連なりを1つの `*` に置き換える。
+    /// 日本語などマルチバイトの区切りや短い ID は触らない。
+    private static func maskTokens(_ s: String) -> String {
+        func isTokenChar(_ c: Character) -> Bool {
+            (c.isASCII && (c.isLetter || c.isNumber)) || c == "-" || c == "_" || c == "="
+        }
+        var out = ""
+        var run = ""
+        func flush() { out += run.count >= 24 ? "*" : run; run = "" }
+        for c in s {
+            if isTokenChar(c) { run.append(c) } else { flush(); out.append(c) }
+        }
+        flush()
+        return out
+    }
+
     static func extracted(page: URL?, total: Int, shown: Int) {
-        log("extract_images", ["host": host(of: page), "total": total, "shown": shown])
+        log("extract_images", ["host": host(of: page), "path": path(of: page), "total": total, "shown": shown])
     }
 
     static func extractFailed(page: URL?) {
-        log("extract_failed", ["host": host(of: page)])
+        log("extract_failed", ["host": host(of: page), "path": path(of: page)])
     }
 
     /// `kind`: "bulk"(一括抽出の結果から)/ "longpress"(長押し)/ "longpress_match"(Canvas の照合)
     static func saved(page: URL?, kind: String, succeeded: Int, failed: Int) {
-        log("save_images", ["host": host(of: page), "kind": kind, "succeeded": succeeded, "failed": failed])
+        log("save_images", ["host": host(of: page), "path": path(of: page),
+                            "kind": kind, "succeeded": succeeded, "failed": failed])
     }
 
     /// 動画・音声を1本保存できたとき。`format` は mp4 / mp3 / m4a。
     static func savedMedia(page: URL?, format: String, hls: Bool, talk: Bool) {
-        log("save_media", ["host": host(of: page), "format": format,
+        log("save_media", ["host": host(of: page), "path": path(of: page), "format": format,
                            "source": talk ? "talk" : hls ? "hls" : "file"])
     }
 
