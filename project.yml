@@ -150,10 +150,12 @@ targets:
         # ビルド0.4(2026-11-26): 設定に「最新情報はXでチェック」(@kaba_apps)の導線を追加。
         # ビルド0.5(2026-11-26): 利用状況にパス(どのページか)を追加。クエリ・フラグメントは除去、
         # 署名トークン等の長い英数字はマスク。ダッシュボードのドメイン行から配下ページを見るため。
+        # 2.1.1 ビルド1(2026-11-27): 2.1.0公開後の開発分(0.3 YouTube/インスタ修正・0.4 Xリンク・
+        # 0.5 パス計測)を 2.1.1 として審査提出。不具合修正+軽微な追加が中心のため仮番号のまま。
         # 1.2.0公開後の開発ビルドは仮のバージョンを固定し、ビルド番号を0.1, 0.2…と刻む。
         # ストア公開直前に正式なバージョンへ付け替えてビルド1にする(ios-dev-playbook.md)。
         MARKETING_VERSION: "2.1.1"
-        CURRENT_PROJECT_VERSION: "0.5"
+        CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PROVISIONING_PROFILE_SPECIFIER: "ImageBrowser AppStore"
     dependencies:
